@@ -709,8 +709,8 @@ class ArubaAOSCXPlatform(SwitchPlatform):
       - ARP output format differs
     """
 
-    platform_name = "aruba_oscx"
-    netmiko_device_type = "aruba_oscx"
+    platform_name = "aruba_aoscx"
+    netmiko_device_type = "aruba_aoscx"
 
     def get_arp_command(self) -> str:
         return "show arp"
@@ -914,7 +914,7 @@ PLATFORM_MAP: dict[str, type[SwitchPlatform]] = {
     "cisco_ios":      CiscoIOSPlatform,
     "cisco_xe":       CiscoIOSPlatform,   # IOS-XE uses same syntax as IOS
     "cisco_nxos":     CiscoNXOSPlatform,
-    "aruba_oscx":     ArubaAOSCXPlatform,
+    "aruba_aoscx":     ArubaAOSCXPlatform,
     "aruba_osswitch": ArubaAOSCXPlatform, # close enough for our parsers
 }
 
@@ -924,10 +924,10 @@ VERSION_FINGERPRINTS: list[tuple[str, str]] = [
     (r'Cisco IOS XE Software', "cisco_ios"),
     (r'Cisco IOS-XE',         "cisco_ios"),
     (r'Cisco Nexus',          "cisco_nxos"),
-    (r'ArubaOS-CX',           "aruba_oscx"),
-    (r'Aruba.*CX',            "aruba_oscx"),
-    (r'AOS-CX',               "aruba_oscx"),
-    (r'HP.*Aruba',            "aruba_oscx"),
+    (r'ArubaOS-CX',           "aruba_aoscx"),
+    (r'Aruba.*CX',            "aruba_aoscx"),
+    (r'AOS-CX',               "aruba_aoscx"),
+    (r'HP.*Aruba',            "aruba_aoscx"),
 ]
 
 
@@ -982,7 +982,7 @@ def detect_platform(
         log.debug(f"SSHDetect failed for {host}: {exc}")
 
     # --- Attempt 2: Connect generic, run 'show version', fingerprint ---
-    for try_type in ["cisco_ios", "cisco_nxos", "aruba_oscx"]:
+    for try_type in ["cisco_ios", "cisco_nxos", "aruba_aoscx"]:
         try:
             conn_params = {
                 "device_type": try_type,
@@ -2076,7 +2076,7 @@ def parse_arguments() -> argparse.Namespace:
             "Examples:\n"
             "  %(prog)s --core 10.1.1.1 --user admin --oui 00:1A:2B\n"
             "  %(prog)s --core 10.1.1.1 --user admin --oui 00:1A:2B "
-            "--platform aruba_oscx\n"
+            "--platform aruba_aoscx\n"
             "  %(prog)s --core 10.1.1.1 --user admin "
             "--oui-file ouis.txt --max-depth 8\n"
             "  %(prog)s --from-csv results.csv --user admin --shutdown\n"
@@ -2099,7 +2099,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     conn.add_argument(
         "--platform",
-        choices=["cisco_ios", "cisco_xe", "cisco_nxos", "aruba_oscx", "auto"],
+        choices=["cisco_ios", "cisco_xe", "cisco_nxos", "aruba_aoscx", "auto"],
         default="auto",
         help=(
             "Force platform for ALL switches. "
