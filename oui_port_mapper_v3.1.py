@@ -719,7 +719,7 @@ class ArubaAOSCXPlatform(SwitchPlatform):
         return "show mac-address-table"
 
     def get_neighbor_command(self) -> str:
-        return "show lldp neighbors-detail"
+        return "show lldp neighbor-info detail"
 
     def get_shutdown_commands(self, interface: str) -> list[str]:
         return [f"interface {interface}", "shutdown"]
@@ -794,50 +794,64 @@ class ArubaAOSCXPlatform(SwitchPlatform):
 
     def parse_neighbors(self, raw_output: str) -> list[Neighbor]:
         """
-        Parse AOS-CX 'show lldp neighbors-detail' output.
+        Parse AOS-CX 'show lldp neighbor-info detail' output.
 
-        Each neighbor block is separated by a blank line or section header.
-        Fields we need:
-          - Local port (Interface or Neighbor-port)
-          - System Name
-          - Management Address (IPv4)
-          - System Description (platform info)
-          - Port-ID (remote interface)
+        Neighbor blocks are separated by lines of dashes (80+ chars).
+        Key fields per block:
+          Port                           : 1/1/2:1
+          Neighbor System-Name           : SL203-48
+          Neighbor Management-Address    : 10.10.0.48
+          Neighbor System-Description    : Aruba R8S90A  FL.10.10.1070
+          Neighbor Port-ID               : 1/1/51
         """
         neighbors = []
 
-        # Split on the "====" separators between neighbor blocks
-        blocks = re.split(r'={5,}|\n\s*\n(?=\s*(?:Interface|Neighbor))', raw_output)
+        # Split on the dash-separator lines between neighbor blocks
+        blocks = re.split(r'-{20,}', raw_output)
 
         for block in blocks:
             if not block.strip():
                 continue
 
-            # Local interface — "Interface : 1/1/1" or "Local Port : 1/1/1"
-            local_intf = (
-                re.search(r'(?:Interface|Local Port|Neighbor-port)\s*:\s*(\S+)', block)
+            # Local port — "Port : 1/1/2:1"
+            local_port_match = re.search(
+                r'^Port\s+:\s*(\S+)', block, re.MULTILINE
             )
-            # System Name
-            sys_name = re.search(r'System Name\s*:\s*(\S+)', block)
-            # Management IP — "Address : 10.1.1.1" under "Management Address"
-            ip_match = re.search(
-                r'(?:Address|Management Address|Management IP)\s*:\s*'
+            # Neighbor hostname — "Neighbor System-Name : SL203-48"
+            sys_name_match = re.search(
+                r'Neighbor System-Name\s+:\s*(\S+)', block
+            )
+            # Neighbor management IP — "Neighbor Management-Address : 10.10.0.48"
+            mgmt_ip_match = re.search(
+                r'Neighbor Management-Address\s+:\s*'
                 r'(\d+\.\d+\.\d+\.\d+)', block
             )
-            # Port-ID (remote interface)
-            remote_intf = re.search(r'Port-?ID\s*:\s*(\S+)', block)
-            # System Description
-            sys_desc = re.search(
-                r'System Description\s*:\s*(.+?)(?:\n\n|\n\S|\Z)', block, re.DOTALL
+            # Neighbor remote port — "Neighbor Port-ID : 1/1/51"
+            remote_port_match = re.search(
+                r'Neighbor Port-ID\s+:\s*(\S+)', block
+            )
+            # Neighbor platform — "Neighbor System-Description : Aruba R8S90A ..."
+            sys_desc_match = re.search(
+                r'Neighbor System-Description\s+:\s*(.+)', block
             )
 
-            if sys_name and ip_match:
+            # Must have at least hostname and management IP to be useful
+            if sys_name_match and mgmt_ip_match:
                 neighbors.append(Neighbor(
-                    local_interface=local_intf.group(1) if local_intf else "unknown",
-                    neighbor_hostname=sys_name.group(1).split('.')[0],
-                    neighbor_ip=ip_match.group(1),
-                    neighbor_platform=sys_desc.group(1).strip()[:80] if sys_desc else "unknown",
-                    neighbor_interface=remote_intf.group(1) if remote_intf else "unknown",
+                    local_interface=(
+                        local_port_match.group(1)
+                        if local_port_match else "unknown"
+                    ),
+                    neighbor_hostname=sys_name_match.group(1).strip(),
+                    neighbor_ip=mgmt_ip_match.group(1),
+                    neighbor_platform=(
+                        sys_desc_match.group(1).strip()[:80]
+                        if sys_desc_match else "unknown"
+                    ),
+                    neighbor_interface=(
+                        remote_port_match.group(1)
+                        if remote_port_match else "unknown"
+                    ),
                     protocol="LLDP",
                 ))
 
