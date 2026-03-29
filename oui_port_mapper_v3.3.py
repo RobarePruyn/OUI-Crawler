@@ -337,8 +337,13 @@ class CiscoIOSPlatform(SwitchPlatform):
         return [f"interface {interface}", "no shutdown"]
 
     def get_vlan_assign_commands(self, interface: str, vlan: str) -> list[str]:
-        """Set access VLAN on a Cisco IOS/IOS-XE port."""
-        return [f"interface {interface}", f"switchport access vlan {vlan}"]
+        """Set access VLAN on a Cisco IOS/IOS-XE port with edge port hardening."""
+        return [
+            f"interface {interface}",
+            f"switchport access vlan {vlan}",
+            "spanning-tree portfast",
+            "spanning-tree bpduguard enable",
+        ]
 
     def parse_mac_table(self, raw_output: str) -> list[MacEntry]:
         """
@@ -554,6 +559,15 @@ class CiscoNXOSPlatform(CiscoIOSPlatform):
 
     platform_name = "cisco_nxos"
     netmiko_device_type = "cisco_nxos"
+
+    def get_vlan_assign_commands(self, interface: str, vlan: str) -> list[str]:
+        """Set access VLAN on a Cisco NX-OS port with edge port hardening."""
+        return [
+            f"interface {interface}",
+            f"switchport access vlan {vlan}",
+            "spanning-tree port type edge",
+            "spanning-tree bpduguard enable",
+        ]
 
     def parse_mac_table(self, raw_output: str) -> list[MacEntry]:
         """
