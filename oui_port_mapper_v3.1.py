@@ -871,50 +871,56 @@ class ArubaAOSCXPlatform(SwitchPlatform):
         """
         Parse AOS-CX 'show lag' output.
 
-        Various AOS-CX versions format this differently. Common patterns:
+        Format:
+          Aggregate lag1 is up
+           Aggregated-interfaces       : 1/1/2:1
+           ...
 
-          Name  : lag1
-          Status: Up
-          Interfaces:
-            1/1/49
-            1/1/50
+          Aggregate lag127 is up
+           Aggregated-interfaces       : 1/1/27 1/1/28
+           ...
 
-        Or tabular:
-          Aggregate  Status  Interfaces
-          lag1       up      1/1/49,1/1/50
-
-        We handle both: look for 'lag<n>' followed by interface names.
+        Members are space-separated on the Aggregated-interfaces line.
+        Some LAGs have empty member lists (down, no interfaces assigned).
+        Interface names can include breakout notation (1/1/2:1).
         """
         channel_to_members: dict[str, list[str]] = {}
 
-        # Strategy 1: Block-based format ("Name : lag1" sections)
-        blocks = re.split(r'(?=Name\s*:\s*lag\d+)', raw_output, flags=re.IGNORECASE)
+        # Split on "Aggregate lagN" headers
+        blocks = re.split(r'(?=Aggregate\s+lag\d+\s+is\s+)', raw_output)
+
         for block in blocks:
-            name_match = re.search(r'Name\s*:\s*(lag\d+)', block, re.IGNORECASE)
-            if not name_match:
+            # Extract LAG name from header: "Aggregate lag2 is up"
+            header_match = re.search(
+                r'Aggregate\s+(lag\d+)\s+is\s+', block
+            )
+            if not header_match:
                 continue
-            lag_name = name_match.group(1).lower()
-            # Find interface lines: bare interface names like 1/1/49
-            intf_pattern = re.compile(r'^\s+(\d+/\d+/\d+)\s*$', re.MULTILINE)
-            members = [m.group(1) for m in intf_pattern.finditer(block)]
+
+            lag_name = header_match.group(1).lower()
+
+            # Extract members: "Aggregated-interfaces : 1/1/2:1"
+            # or multi-member: "Aggregated-interfaces : 1/1/27 1/1/28"
+            # or empty: "Aggregated-interfaces       : "
+            members_match = re.search(
+                r'Aggregated-interfaces\s*:\s*(.*)', block
+            )
+            if not members_match:
+                continue
+
+            members_str = members_match.group(1).strip()
+            if not members_str:
+                continue  # empty LAG, no members assigned
+
+            # Split space-separated interface names
+            # Handles both 1/1/2:1 (breakout) and 1/1/27 (non-breakout)
+            members = [
+                m.strip() for m in members_str.split()
+                if re.match(r'\d+/\d+/\d+', m.strip())
+            ]
+
             if members:
                 channel_to_members[lag_name] = members
-
-        # Strategy 2: Tabular or comma-separated format
-        if not channel_to_members:
-            row_pattern = re.compile(
-                r'(lag\d+)\s+\S+\s+([\d/,\s]+)',
-                re.IGNORECASE
-            )
-            for match in row_pattern.finditer(raw_output):
-                lag_name = match.group(1).lower()
-                members_str = match.group(2)
-                members = [
-                    m.strip() for m in re.split(r'[,\s]+', members_str)
-                    if re.match(r'\d+/\d+/\d+', m.strip())
-                ]
-                if members:
-                    channel_to_members[lag_name] = members
 
         return channel_to_members
 
