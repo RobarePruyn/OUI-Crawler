@@ -107,11 +107,11 @@ The tool supports three switching platforms:
 
 **Cisco IOS / IOS-XE** — Catalyst 9000, 3850, 3650, 2960, and similar. Uses CDP as the primary neighbor discovery protocol, with LLDP as a secondary source. MAC addresses in Cisco dotted notation (xxxx.xxxx.xxxx). Interface names like GigabitEthernet1/0/1.
 
-**Cisco NX-OS** — Nexus 9000, 7000, 5000 series. Uses CDP by default (LLDP also supported). Same Cisco dotted MAC notation. Interface names like Ethernet1/1 and port-channel1. The MAC address table has extra columns compared to IOS (age, Secure, NTFY flags) which the tool's NX-OS parser handles. NX-OS 7.3 uses `~~~` in the age column instead of digits — the parser handles this correctly. Common topology: Nexus core/distribution with Catalyst access switches — auto-detection handles this mixed fabric seamlessly.
+**Cisco NX-OS** — Nexus 9000, 7000, 5000 series. Uses CDP by default (LLDP also supported). Same Cisco dotted MAC notation. Interface names like Ethernet1/1 and port-channel1. The MAC address table has extra columns compared to IOS (age, Secure, NTFY flags) which the tool's NX-OS parser handles. NX-OS 7.3 uses `~~~` in the age column instead of numeric values — the parser handles this.
 
 **Aruba AOS-CX** — CX 6300, 6400, 8320, 8325, 8400, 10000. Uses LLDP natively (CDP is off by default on Aruba). MAC addresses in colon-separated notation (00:1a:2b:3c:4d:5e), which the tool normalizes to Cisco format internally. Interface names like 1/1/1.
 
-**Ubiquiti UniFi** is not supported. UniFi switches are controller-managed and don't expose a usable CLI over SSH. The EdgeSwitch line (discontinued) had a CLI, but current UniFi gear requires hitting the UniFi Controller REST API, which is a fundamentally different integration pattern.
+**Ubiquiti UniFi** is not supported. UniFi switches are controller-managed and don't expose a usable CLI over SSH.
 
 ### Platform Auto-Detection
 
@@ -126,63 +126,48 @@ Auto-detection adds a few seconds per switch on the first connection. If your en
 
 #### Normal Mode (default)
 
-The tool starts at the core switch, finds OUI-matching MACs, and follows them downstream through CDP/LLDP neighbors. This works when the target device VLANs are trunked L2 all the way back to the starting switch — the core sees the MACs in its MAC address table and the tool can trace them.
+Follow OUI-matching MACs through the switching fabric via CDP/LLDP neighbors. This works when target device VLANs are trunked L2 from the edge switches back to the starting switch. The starting switch can "see" the target MACs in its own MAC address table and the tool traces them downstream to the access port.
 
 #### Fan-Out Mode (`--fan-out`)
 
-In routed-access designs, many device VLANs are L3-terminated at the edge switch with an SVI. These VLANs are NOT trunked L2 back to the core — traffic is routed via EIGRP/OSPF sub-interfaces. The core never sees those MACs in its MAC table.
+Visit ALL CDP/LLDP neighbors from the starting switch, regardless of whether any matching MACs are visible at the starting switch. This is required for **routed-access designs** where endpoint VLANs have SVIs on the edge switches and are NOT trunked L2 back to the core. In these designs, the core switch never sees the target MACs — they only exist in the edge switch's local MAC and ARP tables.
 
-Fan-out mode solves this by visiting **every** CDP/LLDP neighbor from the starting switch, regardless of whether any OUI-matching MACs are visible at the core. Each edge switch's local MAC table and ARP table are queried directly. Since the SVIs live on the edge switch, the ARP table there provides IP resolution for locally-switched devices.
+Fan-out only occurs at depth 0 (the starting switch). Edge switches discovered via fan-out use normal MAC-tracing recursion from that point forward. This prevents runaway recursion through datacenter infrastructure (distribution switches, IDS sensors, storage fabric switches, etc.) that have zero endpoints.
 
-Fan-out only triggers at depth 0 (the starting switch). Edge switches use normal MAC-tracing recursion — they do NOT fan out to their own neighbors. This prevents runaway recursion through datacenter infrastructure (IDS, DCS, SFS devices) that have no endpoints.
+Fan-out mode uses concurrent threading (`--workers`, default 10) to SSH to multiple edge switches in parallel.
 
 ### Discovery Workflow
 
 **Step 1 — Connect to the starting switch.** Auto-detect or use the forced platform.
 
-**Step 2 — Pull ARP table.** Builds a MAC→IP lookup. This is merged globally across all switches visited, so ARP data from deeper in the fabric is available for earlier hops. In fan-out mode, each edge switch's ARP table captures locally-switched VLAN entries.
+**Step 2 — Pull ARP table.** Builds a MAC→IP lookup. This is merged globally across all switches visited, so ARP data from deeper in the fabric is available for earlier hops. In routed-access designs, the edge switch's ARP table contains the SVI-learned IP addresses for locally-switched VLANs.
 
 **Step 3 — Pull MAC address table.** Every entry is tested against your OUI prefix list. Only prefix matches proceed.
 
-**Step 4 — Pull CDP/LLDP neighbors.** On Cisco, both CDP and LLDP are queried (some mixed-vendor links only run LLDP). On Aruba, LLDP only. Neighbors are deduplicated — if the same neighbor appears via both protocols, the CDP entry is preferred (it typically has richer data).
+**Step 4 — Pull CDP/LLDP neighbors.** On Cisco, both CDP and LLDP are queried. On Aruba, LLDP only. Neighbors are deduplicated.
 
 **Step 5 — Classify each matching MAC.** Three outcomes:
 
 - **Access port** — Single MAC on the port, no CDP/LLDP neighbor. This is an endpoint. Record it.
 - **Known uplink** — CDP/LLDP neighbor on the port. The MAC is behind another switch. Queue for recursion.
-- **Unknown uplink** — Multiple MACs on the port but no CDP/LLDP neighbor. Likely an unmanaged switch, hub, or a link with discovery protocols disabled. Record here with a note, because we can't determine a management IP to recurse into.
+- **Unknown uplink** — Multiple MACs on the port but no CDP/LLDP neighbor. Record here with a note.
 
-**Step 6 — Recurse or fan-out.** In normal mode, recurse into downstream switches where matching MACs were found. In fan-out mode (depth 0 only), visit all CDP/LLDP neighbors concurrently using `--workers` threads.
+**Step 6 — Recurse or Fan-Out.** In normal mode, recurse into downstream switches where matching MACs were found on uplinks. In fan-out mode (depth 0 only), visit ALL neighbors concurrently, then switch to normal recursion from depth 1+.
 
 **Step 7 — Export.** All results written to CSV with MAC deduplication.
 
-### Hostname-Based Deduplication
+### Hostname-Based Dedup
 
-In many campus networks, the same switch is reachable via multiple management IPs (VRF sub-interfaces, different EIGRP adjacencies). Without dedup, the tool would SSH to the same physical switch multiple times.
-
-v3.0 tracks visited switches by hostname (case-insensitive) in addition to IP. After connecting and reading the switch prompt, if the hostname was already visited via a different IP, the tool disconnects immediately and skips that switch. This dramatically reduces SSH sessions in routed-access designs — at Yankee Stadium, this cut 118 sessions down to ~45.
-
-### Concurrent Threading
-
-Fan-out mode dispatches edge switch queries using a `ThreadPoolExecutor`. The `--workers` flag (default: 10) controls how many SSH sessions run in parallel. With 45 switches at ~2 minutes each:
-
-- Sequential: ~90 minutes
-- 10 workers: ~10 minutes
-
-The thread pool only applies to fan-out at depth 0. Normal MAC-tracing recursion at deeper levels is sequential (by design — each hop depends on the previous).
+In large fabrics, the same switch can appear via multiple management IPs (VRF sub-interfaces, loopback addresses, etc.). The tool tracks visited hostnames (case-insensitive) in addition to IPs. After connecting and reading the switch prompt, if the hostname has been seen before, the connection is dropped immediately. This prevents wasting time re-querying the same switch through a different IP.
 
 ### The Multi-MAC Heuristic
 
-Instead of relying solely on CDP/LLDP to identify uplinks (which fails when discovery protocols are disabled), the tool counts how many total MACs are learned on each port:
+Instead of relying solely on CDP/LLDP to identify uplinks, the tool counts how many total MACs are learned on each port:
 
 - **1 MAC on the port** → access port. An endpoint device directly connected.
-- **>1 MAC on the port** → trunk/uplink. Multiple devices behind this port, meaning it connects to another switch, hub, or segment.
+- **>1 MAC on the port** → trunk/uplink. Multiple devices behind this port.
 
-When a multi-MAC port also has a CDP/LLDP neighbor, the tool recurses to that neighbor. When it doesn't (no neighbor data), it records the MAC at the current switch with a note explaining why it couldn't trace further.
-
-### Recursion Depth
-
-The `--max-depth` flag (default: 10) limits how many hops from the starting switch the tool will traverse. In practice, venue topologies rarely exceed 3 hops (core → dist → access), so the default is generous. Set to 0 to query only the starting switch with no recursion.
+When a multi-MAC port also has a CDP/LLDP neighbor, the tool recurses to that neighbor. When it doesn't, it records the MAC at the current switch with a note.
 
 ---
 
@@ -197,9 +182,7 @@ python3 oui_port_mapper_v3.0.py \
   --oui 00:1A:2B
 ```
 
-Connects to 10.1.1.1, auto-detects whether it's Cisco or Aruba, discovers all MACs starting with `001a2b`, recursively traces them through the fabric, and exports to `oui_port_inventory.csv`.
-
-### Fan-out discovery for routed-access designs
+### Fan-out discovery (routed-access venues)
 
 ```
 python3 oui_port_mapper_v3.0.py \
@@ -211,8 +194,6 @@ python3 oui_port_mapper_v3.0.py \
   --output discovery.csv
 ```
 
-Connects to the core, pulls its CDP/LLDP neighbor table, then SSHs to every edge switch in parallel (10 at a time) and searches each one's local MAC and ARP tables. Use this when device VLANs are L3-terminated at the edge.
-
 ### Force a specific platform
 
 ```
@@ -223,9 +204,7 @@ python3 oui_port_mapper_v3.0.py \
   --platform aruba_oscx
 ```
 
-Skips auto-detection and uses Aruba AOS-CX commands on ALL switches. Use this when your fabric is homogeneous and you want to skip the detection overhead.
-
-### Multiple OUIs
+### Multiple OUIs / OUIs from file
 
 ```
 python3 oui_port_mapper_v3.0.py \
@@ -234,20 +213,6 @@ python3 oui_port_mapper_v3.0.py \
   --oui 00:60:35 \
   --oui 00:10:7F \
   --oui 00:0E:DD
-```
-
-### OUIs from a file
-
-```
-# av_vendor_ouis.txt
-# QSC (Q-SYS)
-00:60:35
-# Crestron
-00:10:7F
-# Shure
-00:0E:DD
-# Audinate (Dante)
-00:1D:C1
 ```
 
 ```
@@ -276,13 +241,18 @@ python3 oui_port_mapper_v3.0.py \
   --user admin \
   --oui 00:60:35 \
   --max-depth 0
+```
 
-# Allow up to 3 hops (core → dist → access)
+### Control concurrency
+
+```
+# 20 concurrent SSH sessions (faster, more management plane load)
 python3 oui_port_mapper_v3.0.py \
   --core 10.1.1.1 \
   --user admin \
-  --oui 00:60:35 \
-  --max-depth 3
+  --oui-file target_ouis.txt \
+  --fan-out \
+  --workers 20
 ```
 
 ### Verbose / debug output
@@ -295,85 +265,49 @@ python3 oui_port_mapper_v3.0.py \
   --verbose
 ```
 
-Shows per-MAC classification decisions, raw command outputs, neighbor deduplication details, and connection timing. Extremely useful for debugging "why isn't this MAC showing up" problems. Note: verbose includes paramiko SSH debug logging, which is very noisy. Omit `--verbose` for normal operation — INFO-level logging still shows switch visits, MAC counts, and device finds.
-
-### Adjust concurrent workers
-
-```
-python3 oui_port_mapper_v3.0.py \
-  --core 10.1.1.1 \
-  --user admin \
-  --oui-file target_ouis.txt \
-  --fan-out \
-  --workers 20
-```
-
-Default is 10 concurrent SSH sessions. Higher values are faster but put more load on the management plane. For older switching fabrics with limited CPU, use `--workers 5`.
-
-### Passing the password inline (for scripting)
-
-```
-python3 oui_port_mapper_v3.0.py \
-  --core 10.1.1.1 \
-  --user admin \
-  --password 'YourPasswordHere' \
-  --oui 00:60:35
-```
-
-Be aware the password is visible in shell history. For production automation, pull credentials from environment variables or a vault.
-
 ---
 
 ## Part 5: Port Actions (Shutdown / No Shutdown / Port Cycle)
 
 ### Safety Filter
 
-v3.0 applies a strict access-port-only safety filter to ALL port actions. A port is only acted on if ALL of these are true:
+All port actions apply a strict **access-port-only safety filter**. A record is only acted on if ALL of these are true:
 
-- Interface is a real port name (not "unknown", "not found", etc.)
-- Interface is NOT a port-channel, LAG, vPC, or aggregate interface
-- Notes field is empty (clean single-MAC access-port find)
+- Interface is a real port name (not "unknown" or "not found")
+- Interface is not a port-channel, LAG, vPC, or other aggregate interface
+- Notes field is empty (clean find — single MAC, access port)
 
-Any record with notes (multi-MAC, uplink, not-resolved, downstream-already-visited) is automatically excluded. The tool reports how many records were filtered and why.
+Records with notes are **automatically excluded**. The tool reports how many were filtered.
 
 ### Dry-run first (always)
 
 ```
 python3 oui_port_mapper_v3.0.py \
-  --core 10.1.1.1 \
+  --from-csv discovery.csv \
   --user admin \
-  --oui 00:60:35 \
   --shutdown \
   --dry-run
 ```
-
-Runs full discovery, exports CSV, prints the list of ports that *would* be shut down, but makes no changes.
 
 ### Live shutdown
 
 ```
 python3 oui_port_mapper_v3.0.py \
-  --core 10.1.1.1 \
+  --from-csv discovery.csv \
   --user admin \
-  --oui 00:60:35 \
   --shutdown
 ```
-
-After discovery, the tool prints every port it's about to act on and asks you to type `YES` (exact, case-sensitive). It then SSHs to each switch and pushes the config.
 
 ### Re-enable ports
 
 ```
 python3 oui_port_mapper_v3.0.py \
-  --core 10.1.1.1 \
+  --from-csv discovery.csv \
   --user admin \
-  --oui 00:60:35 \
   --no-shutdown
 ```
 
-### Port Cycle (shut → wait → no-shut)
-
-Single operation with one confirmation prompt. Shuts down all matched access ports, waits the specified delay, then re-enables them.
+### Port cycle (shut → wait → no-shut)
 
 ```
 # Dry run
@@ -392,7 +326,7 @@ python3 oui_port_mapper_v3.0.py \
   --cycle-delay 5
 ```
 
-The `--cycle-delay` flag controls seconds between shutdown and no-shutdown (default: 5). You confirm once for the shutdown phase; the no-shutdown phase runs automatically after the delay.
+Single confirmation prompt. Shuts down all matched access ports, waits `--cycle-delay` seconds (default 5), then re-enables them.
 
 ### Two-step workflow (recommended for production)
 
@@ -404,26 +338,22 @@ python3 oui_port_mapper_v3.0.py \
   --user admin \
   --oui-file target_ouis.txt \
   --fan-out \
-  --output devices.csv
+  --output discovery.csv
 ```
 
-**Step 2 — Review the CSV.** Open in Excel/Numbers. The safety filter handles multi-MAC and uplink records automatically, but you may want to remove specific devices you don't want to touch. Save.
+**Step 2 — Review the CSV.** The `notes` column shows which records the safety filter will exclude. Records with empty notes are the ones that will be acted on.
 
 **Step 3 — Act on the CSV:**
 
 ```
 python3 oui_port_mapper_v3.0.py \
-  --from-csv devices.csv \
+  --from-csv discovery.csv \
   --user admin \
   --port-cycle \
   --cycle-delay 5
 ```
 
-Loads records from CSV, applies the safety filter (only clean access-port finds pass), and cycles the ports. The `platform` column in the CSV tells the tool which command syntax to use for each switch.
-
-### Running-config only
-
-All port changes are applied to running-config ONLY. A switch reload reverts them. If persistence is needed, manually run `copy running-config startup-config` on each affected switch.
+**Changes are running-config only.** A switch reload reverts them.
 
 ---
 
@@ -440,19 +370,15 @@ All port changes are applied to running-config ONLY. A switch reload reverts the
 | `matched_oui` | Which OUI prefix triggered the match (hex-only). |
 | `platform` | Detected platform of the switch (cisco_ios, cisco_nxos, aruba_oscx). |
 | `discovery_depth` | Hop count from the starting switch (0 = starting switch). |
-| `notes` | Context flags. Empty for clean access-port finds. Populated for edge cases — see below. |
+| `notes` | Context flags. Empty = clean find, safe for port actions. |
 
 ### Notes column values
 
-- **(empty)** — Clean find. MAC is on an access port with a single device. **This is the only category eligible for port actions.**
-- **"multi-MAC port (N MACs), no CDP/LLDP neighbor"** — Port has multiple MACs but no neighbor data. Could be an unmanaged switch, hub, or a link with discovery protocols disabled. The MAC is recorded at this switch because the tool can't trace further. **Excluded from port actions by the safety filter.**
-- **"on uplink, not resolved downstream"** — The MAC was visible on a switch's uplink to a downstream neighbor, but when the tool checked the downstream switch, the MAC wasn't resolved to an access port. **Excluded from port actions.**
-- **"not found on downstream X; recorded at uplink"** — The MAC was visible on the core/dist switch's uplink to switch X, but when the tool checked switch X's MAC table, the MAC had aged out or wasn't present. **Excluded from port actions.**
-- **"downstream already visited"** — The MAC's uplink port points to a switch that was already visited via a different path. **Excluded from port actions.**
-
-### MAC Deduplication
-
-The CSV export deduplicates by MAC address. If the same MAC appears at multiple points in the fabric (e.g., visible at both the core uplink and the edge access port), only the first-recorded entry is kept. Threading race conditions can occasionally produce duplicates; the export handles this automatically.
+- **(empty)** — Clean access-port find. Safe for port actions.
+- **"multi-MAC port (N MACs), no CDP/LLDP neighbor"** — Unmanaged switch, hub, or disabled discovery protocols. Excluded from port actions.
+- **"on uplink, not resolved downstream"** — MAC on uplink, downstream visited but MAC not found there. Excluded from port actions.
+- **"not found on downstream X; recorded at uplink"** — MAC aged out on downstream switch. Excluded from port actions.
+- **"downstream already visited"** — Switch already visited via different path. Excluded from port actions.
 
 ---
 
@@ -467,136 +393,63 @@ The tool accepts any common OUI format:
 | `001A2B` | `001a2b` |
 | `001a.2b` | `001a2b` |
 
-Matching is strictly prefix-based. A 3-byte OUI (6 hex chars) matches the first half of the MAC. Shorter or longer prefixes also work.
-
 ---
 
 ## Part 8: Common AV/Media OUIs
 
 ```
 # av_vendor_ouis.txt
-
-# QSC (Q-SYS)
-00:60:35
-
-# Crestron
-00:10:7F
-
-# Shure (MXA microphones, etc.)
-00:0E:DD
-
-# Audinate (Dante — many OEMs use Audinate's OUI)
-00:1D:C1
-
-# Biamp
-00:90:5A
-
-# Extron
-00:05:A6
-
-# AMX (Harman)
-00:60:9F
-
-# Barco
-00:0F:B5
-
-# Samsung displays
-00:07:AB
-F4:42:8F
-
-# LG displays
-00:E0:91
-A8:23:FE
-
-# BrightSign
-00:24:A4
-
-# Ross Video
-00:1E:2A
+# QSC (Q-SYS)         00:60:35
+# Crestron             00:10:7F
+# Shure                00:0E:DD
+# Audinate (Dante)     00:1D:C1
+# Biamp                00:90:5A
+# Extron               00:05:A6
+# AMX (Harman)         00:60:9F
+# Barco                00:0F:B5
+# Samsung displays     00:07:AB / F4:42:8F
+# LG displays          00:E0:91 / A8:23:FE
+# BrightSign           00:24:A4
+# Ross Video           00:1E:2A
 ```
 
-Verify OUIs against the IEEE database at [https://standards-oui.ieee.org/](https://standards-oui.ieee.org/) for the specific hardware you're targeting. Some vendors use multiple OUI blocks across product lines.
+Verify OUIs against the IEEE database at [https://standards-oui.ieee.org/](https://standards-oui.ieee.org/).
 
 ---
 
 ## Part 9: Troubleshooting
 
-**"Platform auto-detection failed for 10.x.x.x"**
+**"Platform auto-detection failed"** — SSH not responding or unsupported platform. Use `--platform` to force.
 
-- The tool tried both SSHDetect and `show version` fingerprinting and couldn't identify the platform. This usually means SSH isn't responding or the device isn't a supported platform. Use `--platform` to force a type, or check that SSH is enabled on the device.
+**"No matching devices found"** — Confirm OUI is correct. If VLANs are L3-terminated at edge, use `--fan-out`.
 
-**"No matching devices found"**
+**"No OUI matches here, but fan-out mode will check neighbors"** — Normal in fan-out mode. The core doesn't see the MACs; edge switches will.
 
-- Confirm the OUI is correct. Manually check a known device's MAC.
-- The device may not have active traffic (MAC aged out). Ping the device and re-run.
-- In normal mode, verify the starting switch has L2 visibility to the target VLANs. If device VLANs are L3-terminated at the edge, use `--fan-out`.
+**"Already visited X via different IP, skipping"** — Hostname dedup working correctly. Same switch, different VRF IP.
 
-**"No OUI matches here, but fan-out mode will check neighbors"**
+**"Safety filter: N total → M actionable"** — Expected. Records with notes are auto-excluded from port actions.
 
-- This is normal in fan-out mode. The starting switch has no matching MACs in its MAC table (because the VLANs are routed at the edge), but fan-out will visit each edge switch and search their local tables.
+**"Authentication failed"** — Wrong credentials for that switch. Same creds used for all switches.
 
-**"Authentication failed for 10.x.x.x"**
+**"Connection timed out"** — Management IP unreachable. Common for datacenter infra discovered via fan-out.
 
-- Credentials don't work on that switch. The tool uses the same username/password for all switches in the fabric. If an edge switch has different credentials, it will fail on that hop and record the MACs with a note.
+**IP shows "unknown"** — No ARP entry on any visited switch. Device may be powered off or ARP timed out.
 
-**"Connection timed out for 10.x.x.x"**
+**NX-OS age column shows `~~~`** — Normal for NX-OS 7.3+. Parser handles it.
 
-- Management IP from CDP/LLDP is unreachable. Check routing, ACLs, and verify the IP is correct.
-
-**"Already visited <hostname> via different IP, skipping"**
-
-- Normal behavior. The same switch was reachable via multiple VRF sub-interface IPs. Hostname dedup correctly identified it and skipped the duplicate connection.
-
-**IP shows "unknown"**
-
-- The starting switch isn't the L3 gateway for that VLAN.
-- In fan-out mode, the edge switch's ARP table should have the entry. If it's still unknown, the device may not have active traffic — ping it and re-run.
-
-**"multi-MAC port, no CDP/LLDP neighbor" in notes**
-
-- The MAC is on a port with multiple devices but no neighbor discovery data. This is the tool saying "I think there's another switch here but I can't reach it." Possible causes: unmanaged switch, CDP/LLDP disabled on that link, or a device acting as a bridge (e.g., a wireless AP in bridge mode). **These records are automatically excluded from port actions by the safety filter.**
-
-**"on uplink, not resolved downstream" in notes**
-
-- The MAC was on the upstream switch's MAC table pointing toward a downstream switch, but the tool couldn't pin it to an access port on the downstream switch. Usually a timing issue — the MAC aged out between queries. Re-run after pinging the device. **These records are automatically excluded from port actions.**
-
-**Discovery takes too long**
-
-- Use `--fan-out` with `--workers 10` (or higher) for concurrent SSH sessions.
-- Without fan-out, the tool runs sequentially. Fan-out mode with 10 workers typically completes a 40+ switch venue in under 10 minutes.
-- If `--verbose` is enabled, paramiko's SSH debug logging adds significant overhead to the log output. Remove `--verbose` for production runs.
-
-**Safety filter excluded too many ports**
-
-- The filter is deliberately strict. Only records with an empty `notes` field pass. If you need to act on a "multi-MAC" record, manually verify it in the CSV, then edit the notes column to empty and re-run from the CSV.
-
-**Aruba: no neighbors found**
-
-- CDP is off by default on AOS-CX. The tool uses LLDP for Aruba. Make sure LLDP is enabled globally (`lldp enable`) and on the relevant interfaces.
-
-**Mixed vendor: Cisco core can't see Aruba edge via CDP**
-
-- Aruba doesn't run CDP by default. If LLDP is enabled on both sides, the tool picks it up — on Cisco, it queries both CDP and LLDP.
-
-**NX-OS: MAC table returns 0 entries**
-
-- Some NX-OS versions require `show mac address-table dynamic` instead of `show mac address-table`. The current parser uses the base command. If you're getting empty results on a Nexus that you know has MAC entries, run the command manually and check the output format.
-
-**NX-OS: gateway/supervisor MACs showing up**
-
-- The NX-OS parser explicitly filters out entries with `sup-eth` in the port name and `(R)` routed flag. If you're still seeing internal/supervisor MACs in the output, check `--verbose` to see what's being parsed.
+**Fan-out slower than expected** — Adjust `--workers`. Lower = gentler, higher = faster.
 
 ---
 
 ## Part 10: Windows-Specific Notes
 
-On Windows, use `python` instead of `python3` in all commands:
+On Windows, use `python` instead of `python3`:
 
 ```
 python oui_port_mapper_v3.0.py --core 10.1.1.1 --user admin --oui 00:60:35
 ```
 
-In PowerShell, multi-line commands use backtick (`` ` ``) for line continuation:
+PowerShell line continuation uses backtick:
 
 ```powershell
 python oui_port_mapper_v3.0.py `
@@ -608,33 +461,25 @@ python oui_port_mapper_v3.0.py `
   --output results.csv
 ```
 
-Windows may trigger a firewall prompt the first time netmiko opens an outbound SSH connection. Allow it.
-
 ---
 
-## Part 11: Architecture Notes for Mixed-Vendor Fabrics
-
-Platform detection happens per-switch, so any supported combination works transparently.
+## Part 11: Architecture Notes
 
 ### Nexus Core + Catalyst Edge (most common venue topology)
 
-The tool connects to the Nexus 9300/9500/7700, auto-detects NX-OS, and uses the NX-OS MAC table parser (which handles the `*`/`+`/`G` flags, age/Secure/NTFY columns, and `~~~` age fields). CDP on the Nexus identifies downstream Catalyst 9200/9300 switches. In fan-out mode, the tool SSHs to each Catalyst concurrently, detects IOS-XE, and switches to the IOS parser. CDP is native on both platforms, so no additional configuration is needed on the inter-switch links.
+The tool connects to the Nexus, auto-detects NX-OS, and uses the NX-OS parser. CDP identifies downstream Catalyst switches. In fan-out mode, all edge switches are queried concurrently with the correct IOS parser.
 
 ### Cisco Core + Aruba Edge
 
-The core gets Cisco commands (`show cdp neighbors detail`, `show mac address-table`), and when it follows a neighbor to an Aruba switch, it re-detects and switches to Aruba commands (`show lldp neighbors-detail`, `show mac-address-table`). For this to work across a Cisco↔Aruba boundary, LLDP must be enabled on both sides.
-
-### Routed-Access Designs
-
-When device VLANs have SVIs on the edge switch (not trunked to core), use `--fan-out`. The core's CDP table identifies all edge switches; fan-out visits each one and queries its local MAC/ARP tables. The edge switch's ARP table provides IP resolution since it owns the SVIs.
+The core gets Cisco commands; Aruba switches get AOS-CX commands. Inter-switch links need LLDP on both sides.
 
 ### Any Mix with Unmanaged Switches
 
-When the tool hits a port with multiple MACs but no CDP/LLDP neighbor, it records the device at that port with a note. The tool can't traverse through unmanaged devices but it tells you exactly where the trail went cold. The safety filter prevents port actions on these ambiguous records.
+Multi-MAC ports with no CDP/LLDP neighbor get recorded with a note. The tool can't traverse unmanaged devices. These records are automatically excluded from port actions.
 
 ---
 
-## Version History
+## Part 12: Version History
 
 | Version | Changes |
 |---------|---------|
