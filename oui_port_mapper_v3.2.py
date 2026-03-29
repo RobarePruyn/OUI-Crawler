@@ -1582,6 +1582,22 @@ class OUIPortMapper:
                 )
                 is_multi_mac = port_mac_count > self.mac_threshold
 
+                # If the neighbor is outside the management subnet,
+                # it's an endpoint advertising LLDP (e.g., VITEC),
+                # not a switch. Clear it so the MAC count heuristic
+                # handles classification instead.
+                if neighbor and not self._ip_in_mgmt_subnet(
+                    neighbor.neighbor_ip
+                ):
+                    self.log.debug(
+                        f"{indent}    {entry.mac_address} on "
+                        f"{entry.interface} — neighbor "
+                        f"{neighbor.neighbor_hostname} "
+                        f"({neighbor.neighbor_ip}) outside mgmt "
+                        f"subnet, treating as endpoint"
+                    )
+                    neighbor = None
+
                 if neighbor:
                     # --- Known uplink: queue for recursion ---
                     nbr_ip = neighbor.neighbor_ip
