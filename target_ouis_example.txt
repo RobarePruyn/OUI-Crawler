@@ -1,0 +1,10 @@
+# Target Device OUIs
+# Used by oui_port_mapper.py to locate and manage these devices
+#
+# Cisco DMP-4310 Digital Media Players
+00:0F:44
+00:22:BD
+74:26:AC
+#
+# BrightSign Digital Signage Players
+90:AC:3F
