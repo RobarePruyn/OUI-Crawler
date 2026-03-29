@@ -747,11 +747,13 @@ class ArubaAOSCXPlatform(SwitchPlatform):
         return [f"interface {interface}", "no shutdown"]
 
     def get_vlan_assign_commands(self, interface: str, vlan: str) -> list[str]:
-        """Set access VLAN on an Aruba AOS-CX port."""
+        """Set access VLAN on an Aruba AOS-CX port with edge port hardening."""
         return [
             f"interface {interface}",
             "no routing",
             f"vlan access {vlan}",
+            "spanning-tree bpdu-guard",
+            "spanning-tree port-type admin-edge",
         ]
 
     def parse_mac_table(self, raw_output: str) -> list[MacEntry]:
