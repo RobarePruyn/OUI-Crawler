@@ -1635,7 +1635,11 @@ class OUIPortMapper:
                         ),
                         switch_tracked_vlan=tracked_vlan_str,
                     ))
-                    self.resolved_macs.add(entry.mac_address)
+                    # NOTE: Do NOT add to resolved_macs here. Multi-MAC
+                    # uplink records are "best effort" — if the same MAC
+                    # is later found on a clean access port on the actual
+                    # edge switch, that find should take priority. The
+                    # CSV dedup prefers clean records over noted ones.
                     self.log.info(
                         f"{indent}    {entry.mac_address} on "
                         f"{entry.interface} — multi-MAC "
@@ -1884,11 +1888,16 @@ class OUIPortMapper:
         records = records or self.discovered_records
         filename = filename or self.output_file
 
-        # Deduplicate: keep the first (deepest/most specific) record
-        # for each MAC. Threading races can produce duplicates.
+        # Deduplicate by MAC address, preferring clean access-port finds
+        # over multi-MAC uplink records. Sort so clean records (empty notes)
+        # come first, then keep the first occurrence of each MAC.
+        sorted_records = sorted(
+            records,
+            key=lambda r: (0 if not r.notes.strip() else 1)
+        )
         seen_macs: set[str] = set()
         unique_records: list[DeviceRecord] = []
-        for record in records:
+        for record in sorted_records:
             if record.mac_address not in seen_macs:
                 seen_macs.add(record.mac_address)
                 unique_records.append(record)
