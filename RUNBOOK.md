@@ -1,4 +1,4 @@
-# OUI Port Mapper v3.0 — Runbook
+# OUI Port Mapper v4.0 — Runbook
 # Cisco DMP-4310 + BrightSign Discovery & Port Control
 
 **Author:** Robare Pruyn
@@ -14,7 +14,7 @@ Follow each step in order. Do not skip steps.
 You should have received these files. Put them all in the same folder
 (e.g., C:\Users\YourName\oui_mapper\ or ~/oui_mapper/):
 
-    oui_port_mapper_v3.0.py   ← the script
+    oui_port_mapper_v4.0.py   ← the script
     target_ouis.txt           ← the OUI list (Cisco DMP-4310 + BrightSign)
     RUNBOOK.md                ← this file
 
@@ -68,7 +68,7 @@ to a CSV file. It does NOT shut anything down.
 
 Mac/Linux:
 
-    python3 oui_port_mapper_v3.0.py \
+    python3 oui_port_mapper_v4.0.py \
       --core CORE_SWITCH_IP \
       --user SSH_USERNAME \
       --oui-file target_ouis.txt \
@@ -78,7 +78,7 @@ Mac/Linux:
 
 Windows (one line):
 
-    python oui_port_mapper_v3.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --oui-file target_ouis.txt --fan-out --workers 10 --output discovery_results.csv
+    python oui_port_mapper_v4.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --oui-file target_ouis.txt --fan-out --workers 10 --output discovery_results.csv
 
 Replace CORE_SWITCH_IP with the management IP of the core switch
 (e.g., 32.21.168.1). Replace SSH_USERNAME with your SSH login username.
@@ -119,11 +119,11 @@ Useful for forcing DMP/BrightSign reboots or DHCP re-acquisition.
 
 Dry run (see what WOULD happen, no changes made):
 
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5 --dry-run
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5 --dry-run
 
 Live (actually does it):
 
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5
 
 (On Windows, use `python` instead of `python3`.)
 
@@ -145,22 +145,22 @@ and unknown interfaces. You don't need to manually edit the CSV.
 
 ### TASK 3: SHUT DOWN ONLY (without re-enabling)
 
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown --dry-run
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown --dry-run
 
 Review the dry run, then run for real (remove --dry-run):
 
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown
 
 Same YES confirmation prompt. Same safety filter.
 
 
 ### TASK 4: RE-ENABLE ONLY (without shutting down first)
 
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown --dry-run
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown --dry-run
 
 Review the dry run, then for real:
 
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown
 
 
 ### TASK 5: DISCOVER AND PORT-CYCLE IN ONE PASS (if you're in a hurry)
@@ -169,7 +169,7 @@ This discovers and immediately offers to port-cycle in a single run.
 No CSV review step. Use only if you're confident the OUI list is
 targeting the right devices.
 
-    python3 oui_port_mapper_v3.0.py \
+    python3 oui_port_mapper_v4.0.py \
       --core CORE_SWITCH_IP \
       --user SSH_USERNAME \
       --oui-file target_ouis.txt \
@@ -180,17 +180,61 @@ targeting the right devices.
 
 You still get the YES confirmation prompt before anything happens.
 
+
+### TASK 6: REASSIGN VLANS TO CORRECT IDF VLAN
+
+**Do Task 1 first with --track-vlans.** The discovery CSV must have
+the switch_tracked_vlan column populated.
+
+Dry run first:
+
+    python3 oui_port_mapper_v4.0.py \
+      --from-csv discovery_results.csv \
+      --user SSH_USERNAME \
+      --vlan-assign \
+      --dry-run
+
+This shows which ports will be changed and what VLAN they'll move to.
+Only ports where the current VLAN differs from the tracked VLAN for
+that switch are included. Ports already on the correct VLAN are skipped.
+
+Live:
+
+    python3 oui_port_mapper_v4.0.py \
+      --from-csv discovery_results.csv \
+      --user SSH_USERNAME \
+      --vlan-assign
+
+To also persist the changes to startup-config, add --save-config:
+
+    python3 oui_port_mapper_v4.0.py \
+      --from-csv discovery_results.csv \
+      --user SSH_USERNAME \
+      --vlan-assign \
+      --save-config
+
+Per port, the tool pushes the access VLAN plus STP edge hardening:
+  Aruba:  no routing / vlan access N / spanning-tree bpdu-guard /
+          spanning-tree port-type admin-edge
+  Cisco:  switchport access vlan N / spanning-tree portfast /
+          spanning-tree bpduguard enable
+
 ---
 
 ## IMPORTANT NOTES
 
-**Changes are running-config only.** A switch reload will revert
-all shut/no-shut changes. If you need to make them permanent,
-manually log into each switch and run:
+**Changes are running-config only by default.** A switch reload will
+revert all changes. To persist changes to startup-config, add the
+--save-config flag to any action command. The tool runs 'write memory'
+on each switch after applying changes.
 
-    copy running-config startup-config
+    # Example: port-cycle with save
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5 --save-config
 
-**The safety filter protects you.** The tool will NOT shut down:
+    # Example: VLAN assign with save
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --vlan-assign --save-config
+
+**The safety filter protects you.** The tool will NOT act on:
   - Ports with multiple MACs (likely trunks or uplinks)
   - Port-channels, LAGs, or vPC interfaces
   - Ports where the device couldn't be fully traced
@@ -207,25 +251,34 @@ Replace CORE_SWITCH_IP and SSH_USERNAME every time.
 On Windows, use `python` instead of `python3`.
 
     # Discover only (fan-out mode)
-    python3 oui_port_mapper_v3.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --oui-file target_ouis.txt --fan-out --workers 10 --output discovery_results.csv
+    python3 oui_port_mapper_v4.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --oui-file target_ouis.txt --fan-out --workers 10 --output discovery_results.csv
+
+    # Discover with VLAN tracking
+    python3 oui_port_mapper_v4.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --oui-file target_ouis.txt --track-vlans 21,22,23,24,25 --output discovery_results.csv
+
+    # VLAN reassignment from CSV (dry run first)
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --vlan-assign --dry-run
+
+    # VLAN reassignment from CSV (live, with save)
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --vlan-assign --save-config
 
     # Port cycle from CSV (dry run first)
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5 --dry-run
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5 --dry-run
 
     # Port cycle from CSV (for real)
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-cycle --cycle-delay 5
 
     # Shut down from CSV (dry run first)
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown --dry-run
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown --dry-run
 
     # Shut down from CSV (for real)
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --shutdown
 
     # Re-enable from CSV (dry run first)
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown --dry-run
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown --dry-run
 
     # Re-enable from CSV (for real)
-    python3 oui_port_mapper_v3.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown
 
 ---
 

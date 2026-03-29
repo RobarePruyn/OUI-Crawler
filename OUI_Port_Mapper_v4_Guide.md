@@ -1,4 +1,4 @@
-# OUI Port Mapper v3.0 — Setup & Usage Guide
+# OUI Port Mapper v4.0 — Setup & Usage Guide
 
 **Author:** Robare Pruyn
 **Copyright:** Mediacast Network Solutions, Inc. 2026
@@ -152,13 +152,25 @@ Fan-out mode uses concurrent threading (`--workers`, default 10) to SSH to multi
 - **Known uplink** — CDP/LLDP neighbor on the port. The MAC is behind another switch. Queue for recursion.
 - **Unknown uplink** — Multiple MACs on the port but no CDP/LLDP neighbor. Record here with a note.
 
-**Step 6 — Recurse or Fan-Out.** In normal mode, recurse into downstream switches where matching MACs were found on uplinks. In fan-out mode (depth 0 only), visit ALL neighbors concurrently, then switch to normal recursion from depth 1+.
+**Step 6 — Recurse or Fan-Out.** In normal mode, recurse into downstream switches where matching MACs were found on uplinks. In fan-out mode (depth 0 only), visit ALL neighbors concurrently, then switch to normal recursion from depth 1+. In both modes, all downstream switches at a given hop are queried in parallel using `--workers` threads.
 
 **Step 7 — Export.** All results written to CSV with MAC deduplication.
 
 ### Hostname-Based Dedup
 
 In large fabrics, the same switch can appear via multiple management IPs (VRF sub-interfaces, loopback addresses, etc.). The tool tracks visited hostnames (case-insensitive) in addition to IPs. After connecting and reading the switch prompt, if the hostname has been seen before, the connection is dropped immediately. This prevents wasting time re-querying the same switch through a different IP.
+
+### Concurrent Threading
+
+Both fan-out mode and normal recursion dispatch downstream switches using a `ThreadPoolExecutor`. The `--workers` flag (default: 10) controls how many SSH sessions run in parallel. All switches at the same hop depth are queried concurrently, regardless of discovery mode.
+
+### MAC Threshold (`--mac-threshold`)
+
+By default, any port with more than 1 MAC is treated as a trunk/uplink. Some endpoint devices (e.g., VITEC EP6 encoders) present 2 MACs on their access port — the data NIC plus an LLDP-advertised management MAC. Use `--mac-threshold 2` to treat ports with ≤2 MACs as access ports.
+
+### Management Subnet Filter (`--mgmt-subnet`)
+
+Some endpoints advertise LLDP (e.g., VITEC encoders). Without filtering, the tool tries to SSH into them, wastes time on auth failures, and misclassifies their ports as uplinks. Use `--mgmt-subnet 10.10.0.0/25` to restrict recursion to neighbors whose management IP falls within the switch management subnet. Neighbors outside this subnet are treated as endpoints for classification purposes — their ports fall through to the MAC count heuristic.
 
 ### The Multi-MAC Heuristic
 
@@ -176,7 +188,7 @@ When a multi-MAC port also has a CDP/LLDP neighbor, the tool recurses to that ne
 ### Basic discovery — auto-detect platform
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:1A:2B
@@ -185,7 +197,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Fan-out discovery (routed-access venues)
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui-file target_ouis.txt \
@@ -197,7 +209,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Force a specific platform
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:1A:2B \
@@ -207,7 +219,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Multiple OUIs / OUIs from file
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:60:35 \
@@ -216,7 +228,7 @@ python3 oui_port_mapper_v3.0.py \
 ```
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui-file av_vendor_ouis.txt
@@ -225,7 +237,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Custom output filename
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:60:35 \
@@ -236,7 +248,7 @@ python3 oui_port_mapper_v3.0.py \
 
 ```
 # Only check the starting switch, no recursion
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:60:35 \
@@ -247,7 +259,7 @@ python3 oui_port_mapper_v3.0.py \
 
 ```
 # 20 concurrent SSH sessions (faster, more management plane load)
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui-file target_ouis.txt \
@@ -258,7 +270,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Verbose / debug output
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:60:35 \
@@ -282,7 +294,7 @@ Records with notes are **automatically excluded**. The tool reports how many wer
 ### Dry-run first (always)
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --from-csv discovery.csv \
   --user admin \
   --shutdown \
@@ -292,7 +304,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Live shutdown
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --from-csv discovery.csv \
   --user admin \
   --shutdown
@@ -301,7 +313,7 @@ python3 oui_port_mapper_v3.0.py \
 ### Re-enable ports
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --from-csv discovery.csv \
   --user admin \
   --no-shutdown
@@ -311,7 +323,7 @@ python3 oui_port_mapper_v3.0.py \
 
 ```
 # Dry run
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --from-csv discovery.csv \
   --user admin \
   --port-cycle \
@@ -319,7 +331,7 @@ python3 oui_port_mapper_v3.0.py \
   --dry-run
 
 # Live
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --from-csv discovery.csv \
   --user admin \
   --port-cycle \
@@ -333,7 +345,7 @@ Single confirmation prompt. Shuts down all matched access ports, waits `--cycle-
 **Step 1 — Discover and export:**
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui-file target_ouis.txt \
@@ -346,14 +358,58 @@ python3 oui_port_mapper_v3.0.py \
 **Step 3 — Act on the CSV:**
 
 ```
-python3 oui_port_mapper_v3.0.py \
+python3 oui_port_mapper_v4.0.py \
   --from-csv discovery.csv \
   --user admin \
   --port-cycle \
   --cycle-delay 5
 ```
 
-**Changes are running-config only.** A switch reload reverts them.
+### VLAN Reassignment (`--vlan-assign`)
+
+Moves access ports to their correct VLAN based on `--track-vlans` data from the discovery run. Only changes ports where the current VLAN differs from the tracked VLAN for that switch.
+
+```
+# Dry run
+python3 oui_port_mapper_v4.0.py \
+  --from-csv discovery.csv \
+  --user admin \
+  --vlan-assign \
+  --dry-run
+
+# Live
+python3 oui_port_mapper_v4.0.py \
+  --from-csv discovery.csv \
+  --user admin \
+  --vlan-assign
+```
+
+The tool skips records where:
+- The device is already on the correct VLAN
+- The tracked VLAN is ambiguous (e.g., core switch with multiple VLANs active)
+- The tracked VLAN field is empty
+
+Platform-aware commands are pushed per port:
+
+| Platform | Commands |
+|---|---|
+| Cisco IOS/IOS-XE | `switchport access vlan N`, `spanning-tree portfast`, `spanning-tree bpduguard enable` |
+| Cisco NX-OS | `switchport access vlan N`, `spanning-tree port type edge`, `spanning-tree bpduguard enable` |
+| Aruba AOS-CX | `no routing`, `vlan access N`, `spanning-tree bpdu-guard`, `spanning-tree port-type admin-edge` |
+
+### Saving Configuration (`--save-config`)
+
+By default, all changes are **running-config only** — a switch reload reverts them. Add `--save-config` to persist changes to startup-config after each switch is configured.
+
+```
+python3 oui_port_mapper_v4.0.py \
+  --from-csv discovery.csv \
+  --user admin \
+  --vlan-assign \
+  --save-config
+```
+
+The tool runs `write memory` on each switch after applying changes. This works with `--shutdown`, `--no-shutdown`, `--port-cycle`, and `--vlan-assign`.
 
 ---
 
@@ -371,6 +427,7 @@ python3 oui_port_mapper_v3.0.py \
 | `platform` | Detected platform of the switch (cisco_ios, cisco_nxos, aruba_oscx). |
 | `discovery_depth` | Hop count from the starting switch (0 = starting switch). |
 | `notes` | Context flags. Empty = clean find, safe for port actions. |
+| `switch_tracked_vlan` | Active tracked VLAN(s) on this switch (from `--track-vlans`). Single value = the VLAN this IDF uses. |
 
 ### Notes column values
 
@@ -446,13 +503,13 @@ Verify OUIs against the IEEE database at [https://standards-oui.ieee.org/](https
 On Windows, use `python` instead of `python3`:
 
 ```
-python oui_port_mapper_v3.0.py --core 10.1.1.1 --user admin --oui 00:60:35
+python oui_port_mapper_v4.0.py --core 10.1.1.1 --user admin --oui 00:60:35
 ```
 
 PowerShell line continuation uses backtick:
 
 ```powershell
-python oui_port_mapper_v3.0.py `
+python oui_port_mapper_v4.0.py `
   --core 10.1.1.1 `
   --user admin `
   --oui-file target_ouis.txt `
@@ -483,6 +540,7 @@ Multi-MAC ports with no CDP/LLDP neighbor get recorded with a note. The tool can
 
 | Version | Changes |
 |---------|---------|
-| v3.0 | Fan-out mode (depth-0 only), concurrent threading, hostname dedup, access-port-only safety filter, port-cycle operation, MAC dedup in CSV export |
+| v4.0 | Concurrent recursion at all depths, `--save-config` to persist to startup, `--vlan-assign` for VLAN reassignment with platform-correct STP edge hardening, `--mac-threshold` for dual-NIC devices, `--mgmt-subnet` filter for LLDP-advertising endpoints |
+| v3.0 | Fan-out mode (depth-0 only), concurrent fan-out threading, hostname dedup, access-port-only safety filter, port-cycle operation, MAC dedup in CSV export, VLAN tracking |
 | v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS `~~~` age field fix, recursive discovery |
 | v1.0 | Initial single-hop core-only discovery |

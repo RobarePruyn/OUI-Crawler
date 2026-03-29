@@ -10,11 +10,16 @@ Multi-platform network automation tool that locates devices by OUI prefix across
 - **Automatic platform detection** via SSH fingerprinting (IOS, NX-OS, AOS-CX)
 - **Recursive MAC tracing** through CDP/LLDP neighbors and port-channel members
 - **Fan-out mode** for routed-access designs where endpoint VLANs are L3-terminated at edge switches
-- **Concurrent threading** for parallel SSH sessions during fan-out discovery
+- **Concurrent threading** at all recursion depths for parallel SSH sessions
 - **Hostname-based dedup** prevents revisiting the same switch via different VRF sub-interface IPs
-- **Access-port-only safety filter** for shut/no-shut/port-cycle operations
+- **Access-port-only safety filter** for all port operations
 - **Port-cycle operation** (shut → wait → no-shut) with a single confirmation prompt
-- **CSV export** with MAC deduplication
+- **VLAN reassignment** (`--vlan-assign`) moves ports to their correct VLAN with platform-aware STP edge hardening
+- **VLAN tracking** (`--track-vlans`) determines which monitored VLANs are active per switch
+- **MAC threshold** (`--mac-threshold`) handles dual-NIC devices (e.g., VITEC encoders)
+- **Management subnet filter** (`--mgmt-subnet`) prevents recursion into LLDP-advertising endpoints
+- **Save config** (`--save-config`) persists changes to startup-config
+- **CSV export** with MAC deduplication (clean finds prioritized over uplink records)
 
 ## Requirements
 
@@ -26,21 +31,37 @@ pip install netmiko
 
 ### Discovery (normal mode)
 ```bash
-python3 oui_port_mapper_v3.0.py --core 10.1.1.1 --user admin --oui 00:1A:2B --output discovery.csv
+python3 oui_port_mapper_v4.0.py --core 10.1.1.1 --user admin --oui 00:1A:2B --output discovery.csv
 ```
 
 ### Discovery (fan-out mode for routed-access)
 ```bash
-python3 oui_port_mapper_v3.0.py --core 10.1.1.1 --user admin --oui-file target_ouis.txt --fan-out --workers 10 --output discovery.csv
+python3 oui_port_mapper_v4.0.py --core 10.1.1.1 --user admin --oui-file target_ouis.txt --fan-out --workers 10 --output discovery.csv
+```
+
+### Discovery with VLAN tracking and endpoint filtering
+```bash
+python3 oui_port_mapper_v4.0.py --core 10.10.0.2 --user admin --oui 4C:A0:03 \
+  --platform aruba_aoscx --mac-threshold 2 --mgmt-subnet 10.10.0.0/25 \
+  --track-vlans 21,22,23,24,25 --output discovery.csv
+```
+
+### VLAN reassignment from CSV
+```bash
+# Dry run first
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --vlan-assign --dry-run
+
+# Live with save to startup
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --vlan-assign --save-config
 ```
 
 ### Port-cycle from CSV
 ```bash
 # Dry run first
-python3 oui_port_mapper_v3.0.py --from-csv discovery.csv --user admin --port-cycle --cycle-delay 5 --dry-run
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --port-cycle --cycle-delay 5 --dry-run
 
 # Live
-python3 oui_port_mapper_v3.0.py --from-csv discovery.csv --user admin --port-cycle --cycle-delay 5
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --port-cycle --cycle-delay 5
 ```
 
 ## OUI File Format
@@ -57,17 +78,18 @@ One OUI per line, `#` comments supported:
 
 ## Safety
 
-Port actions (shutdown, no-shutdown, port-cycle) only operate on **clean access-port finds**. Records are automatically excluded if they have:
+Port actions (shutdown, no-shutdown, port-cycle, vlan-assign) only operate on **clean access-port finds**. Records are automatically excluded if they have:
 - Notes (multi-MAC, uplink, not-resolved downstream)
 - Port-channel, LAG, or vPC interface names
 - Unknown or missing interface names
 
-All changes are **running-config only** — a reload reverts them. A `YES` confirmation prompt (exact, case-sensitive) is required before any changes are applied.
+All changes are **running-config only** by default — a reload reverts them. Use `--save-config` to persist. A `YES` confirmation prompt (exact, case-sensitive) is required before any changes are applied.
 
 ## Version History
 
 | Version | Changes |
 |---------|---------|
-| v3.0 | Fan-out mode (depth-0 only), concurrent threading, hostname dedup, access-port-only safety filter, port-cycle operation, MAC dedup in CSV export |
-| v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS `~~~` age field fix, recursive discovery |
+| v4.0 | Concurrent recursion at all depths, `--save-config`, `--vlan-assign` with platform STP hardening, `--mac-threshold`, `--mgmt-subnet` |
+| v3.0 | Fan-out mode, concurrent fan-out threading, hostname dedup, safety filter, port-cycle, VLAN tracking, CSV dedup |
+| v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS parser fixes, recursive discovery |
 | v1.0 | Initial single-hop core-only discovery |
