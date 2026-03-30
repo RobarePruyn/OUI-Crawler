@@ -461,12 +461,25 @@ class CiscoIOSPlatform(SwitchPlatform):
             )
 
             if device_id and ip_match:
+                # Strip trailing comma from interface names — CDP format is:
+                # "Interface: TenGigabitEthernet2/1/1,  Port ID..."
+                # The \S+ captures the comma; without stripping it,
+                # port-channel promotion fails because the interface
+                # name doesn't match the etherchannel member name.
+                local_intf_str = (
+                    local_intf.group(1).rstrip(",")
+                    if local_intf else "unknown"
+                )
+                remote_intf_str = (
+                    remote_intf.group(1).rstrip(",")
+                    if remote_intf else "unknown"
+                )
                 neighbors.append(Neighbor(
-                    local_interface=local_intf.group(1) if local_intf else "unknown",
+                    local_interface=local_intf_str,
                     neighbor_hostname=device_id.group(1).split('.')[0],
                     neighbor_ip=ip_match.group(1),
                     neighbor_platform=platform_match.group(1).strip() if platform_match else "unknown",
-                    neighbor_interface=remote_intf.group(1) if remote_intf else "unknown",
+                    neighbor_interface=remote_intf_str,
                     protocol="CDP",
                 ))
 
