@@ -129,7 +129,19 @@ PLATFORM_MAP: dict[str, type[SwitchPlatform]] = {
     "cisco_xe":       CiscoIOSPlatform,   # IOS-XE uses same syntax as IOS
     "cisco_nxos":     CiscoNXOSPlatform,
     "aruba_aoscx":     ArubaAOSCXPlatform,
-    "aruba_osswitch": ArubaAOSCXPlatform, # close enough for our parsers
+    "aruba_osswitch": ArubaAOSCXPlatform, # SSHDetect sometimes returns this for AOS-CX
+    "aruba_os":       ArubaAOSCXPlatform, # SSHDetect may also return this
+}
+
+# SSHDetect returns netmiko device_type strings that may not be the correct
+# driver for the actual hardware.  In particular, AOS-CX switches are often
+# detected as "aruba_osswitch" (legacy ArubaOS) which uses a different
+# netmiko SSH driver and mangles output.  This table remaps to the correct
+# netmiko device_type for the SSH connection while PLATFORM_MAP still picks
+# the right parser class.
+DEVICE_TYPE_REMAP: dict[str, str] = {
+    "aruba_osswitch": "aruba_aoscx",
+    "aruba_os":       "aruba_aoscx",
 }
 
 # Patterns in 'show version' output to identify platform
@@ -181,9 +193,17 @@ def detect_platform(
         if best_match and best_match in PLATFORM_MAP:
             # SSHDetect's internal connection is not fully set up for
             # reliable command execution, so disconnect and let the
-            # caller reconnect with the proper device_type
+            # caller reconnect with the proper device_type.
+            # Remap to the correct netmiko driver if needed (e.g.,
+            # SSHDetect returns aruba_osswitch for AOS-CX hardware).
+            remapped = DEVICE_TYPE_REMAP.get(best_match, best_match)
+            if remapped != best_match:
+                log.info(
+                    f"Remapping SSHDetect result '{best_match}' → "
+                    f"'{remapped}' for {host}"
+                )
             detector.connection.disconnect()
-            return best_match, None
+            return remapped, None
 
         if best_match:
             log.debug(
