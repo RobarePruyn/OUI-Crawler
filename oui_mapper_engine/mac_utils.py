@@ -35,10 +35,14 @@ def normalize_oui_prefix(raw_oui: str) -> str:
 def mac_matches_oui(mac_cisco: str, normalized_oui_list: list[str]) -> Optional[str]:
     """
     Check if a Cisco-format MAC matches any OUI prefix in the list.
-    Returns the matched OUI string if found, None otherwise.
+    Returns the longest (most specific) matched OUI string if found,
+    None otherwise.  Longest-prefix-match: e4:30:22:b8 beats e4:30:22.
     """
     mac_hex = mac_cisco.replace('.', '')
+    best_match: Optional[str] = None
+    best_len = 0
     for oui_prefix in normalized_oui_list:
-        if mac_hex.startswith(oui_prefix):
-            return oui_prefix
-    return None
+        if mac_hex.startswith(oui_prefix) and len(oui_prefix) > best_len:
+            best_match = oui_prefix
+            best_len = len(oui_prefix)
+    return best_match

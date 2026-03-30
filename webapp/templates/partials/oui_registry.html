@@ -1,0 +1,154 @@
+<h3>OUI Registry ({{ entries | length }})</h3>
+
+{% if entries %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Prefix</th>
+            <th>Description</th>
+            <th>Manufacturer</th>
+            <th>VLAN &harr; Subnet Mappings</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for e in entries %}
+        {% set vlan_list = e.candidate_vlans | fromjson if e.candidate_vlans is string else [] %}
+        {% set ip_list = e.expected_ips | fromjson if e.expected_ips is string else [] %}
+        <!-- Display row -->
+        <tr id="oui-display-{{ e.id }}">
+            <td><code>{{ e.oui_prefix }}</code></td>
+            <td>{{ e.description or "-" }}</td>
+            <td>{{ e.manufacturer or "-" }}</td>
+            <td>
+                {% if vlan_list %}
+                    {% for v in vlan_list %}
+                    <span style="white-space:nowrap;">
+                        VLAN <strong>{{ v }}</strong>{% if ip_list[loop.index0] is defined %} &rarr; <code>{{ ip_list[loop.index0] }}</code>{% endif %}{% if not loop.last %}<br>{% endif %}
+                    </span>
+                    {% endfor %}
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td style="white-space:nowrap;">
+                <button type="button" class="outline" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="ouiEdit({{ e.id }})">Edit</button>
+                <form hx-delete="/api/venues/{{ venue.id }}/oui/{{ e.id }}"
+                      hx-target="#oui-registry"
+                      hx-swap="innerHTML"
+                      hx-confirm="Delete this OUI entry?"
+                      style="margin:0;display:inline;">
+                    <button type="submit" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        <!-- Edit row (hidden by default) -->
+        <tr id="oui-edit-{{ e.id }}" style="display:none;">
+            <td colspan="5">
+                <form hx-put="/api/venues/{{ venue.id }}/oui/{{ e.id }}"
+                      hx-target="#oui-registry"
+                      hx-swap="innerHTML">
+                    <div class="grid">
+                        <label>
+                            OUI Prefix
+                            <input type="text" name="oui_prefix" value="{{ e.oui_prefix }}" required style="font-family:monospace;">
+                        </label>
+                        <label>
+                            Description
+                            <input type="text" name="description" value="{{ e.description or '' }}">
+                        </label>
+                        <label>
+                            Manufacturer
+                            <input type="text" name="manufacturer" value="{{ e.manufacturer or '' }}">
+                        </label>
+                    </div>
+                    <div class="grid">
+                        <label>
+                            VLANs
+                            <input type="text" name="candidate_vlans" value="{{ vlan_list | join(', ') }}">
+                            <small class="field-help">Comma-separated</small>
+                        </label>
+                        <label>
+                            Expected Subnets
+                            <input type="text" name="expected_ips" value="{{ ip_list | join(', ') }}">
+                            <small class="field-help">Comma-separated, matched 1:1 with VLANs</small>
+                        </label>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;">
+                        <button type="submit" style="width:auto;padding:0.25rem 0.75rem;">Save</button>
+                        <button type="button" class="outline secondary" style="width:auto;padding:0.25rem 0.75rem;" onclick="ouiCancel({{ e.id }})">Cancel</button>
+                    </div>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+<form hx-post="/api/venues/{{ venue.id }}/oui"
+      hx-target="#oui-registry"
+      hx-swap="innerHTML">
+    <div class="grid">
+        <label>
+            OUI Prefix
+            <input type="text" name="oui_prefix" placeholder="00:0F:44 or e4:30:22:b8" required style="font-family:monospace;">
+        </label>
+        <label>
+            Description
+            <input type="text" name="description" placeholder="Shure MXA920">
+        </label>
+        <label>
+            Manufacturer
+            <div style="display:flex;gap:0.25rem;">
+                <input type="text" name="manufacturer" id="mfr-field-{{ venue.id }}" placeholder="(auto-lookup)">
+                <button type="button" class="outline" style="width:auto;padding:0.25rem 0.5rem;white-space:nowrap;font-size:0.8rem;" onclick="lookupOUI(this)">Lookup</button>
+            </div>
+        </label>
+    </div>
+    <div class="grid">
+        <label>
+            VLAN &harr; Subnet Pairs
+            <input type="text" name="candidate_vlans" placeholder="21,22,23">
+            <small class="field-help">Comma-separated VLAN IDs (paired by position with subnets below)</small>
+        </label>
+        <label>
+            Expected Subnets
+            <input type="text" name="expected_ips" placeholder="10.2.1.0/24,10.2.2.0/24,10.2.3.0/24">
+            <small class="field-help">Comma-separated subnets, matched 1:1 with VLANs above</small>
+        </label>
+    </div>
+    <button type="submit" style="width:auto;">Add OUI Entry</button>
+</form>
+
+<script>
+function ouiEdit(id) {
+    document.getElementById('oui-display-' + id).style.display = 'none';
+    document.getElementById('oui-edit-' + id).style.display = '';
+}
+function ouiCancel(id) {
+    document.getElementById('oui-display-' + id).style.display = '';
+    document.getElementById('oui-edit-' + id).style.display = 'none';
+}
+function lookupOUI(btn) {
+    const form = btn.closest('form');
+    const prefix = form.querySelector('[name="oui_prefix"]').value.trim();
+    if (!prefix) return;
+    const mfr = form.querySelector('[name="manufacturer"]');
+    btn.setAttribute('aria-busy', 'true');
+    fetch('/api/oui/lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({oui_prefix: prefix}),
+    })
+    .then(r => r.json())
+    .then(data => {
+        btn.removeAttribute('aria-busy');
+        if (data.found) mfr.value = data.manufacturer;
+        else mfr.placeholder = 'Not found in IEEE database';
+    })
+    .catch(() => { btn.removeAttribute('aria-busy'); });
+}
+</script>

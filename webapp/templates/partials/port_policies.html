@@ -1,0 +1,77 @@
+<h3>Port Policies ({{ policies | length }})</h3>
+
+{% if policies %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>VLAN</th>
+            <th>BPDU Guard</th>
+            <th>Portfast</th>
+            <th>Storm Control</th>
+            <th>Level</th>
+            <th>Desc Template</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in policies %}
+        <tr>
+            <td>{{ p.vlan }}</td>
+            <td>{{ "Yes" if p.bpdu_guard else "No" }}</td>
+            <td>{{ "Yes" if p.portfast else "No" }}</td>
+            <td>{{ "Yes" if p.storm_control else "No" }}</td>
+            <td>{{ p.storm_control_level if p.storm_control else "-" }}</td>
+            <td>{{ p.description_template or "-" }}</td>
+            <td>
+                <form hx-delete="/api/venues/{{ venue.id }}/policies/{{ p.id }}"
+                      hx-target="#port-policies" hx-swap="innerHTML"
+                      hx-confirm="Delete this policy?"
+                      style="margin:0;">
+                    <button type="submit" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+<form hx-post="/api/venues/{{ venue.id }}/policies"
+      hx-target="#port-policies"
+      hx-swap="innerHTML">
+    <div class="grid">
+        <label>
+            VLAN
+            <input type="text" name="vlan" placeholder="21" required>
+        </label>
+        <label>
+            Description Template
+            <input type="text" name="description_template" placeholder="{mac} {ip}">
+        </label>
+    </div>
+    <div class="grid">
+        <label>
+            <input type="checkbox" name="bpdu_guard" value="true" checked>
+            BPDU Guard
+        </label>
+        <label>
+            <input type="checkbox" name="portfast" value="true" checked>
+            Portfast
+        </label>
+        <label>
+            <input type="checkbox" name="storm_control" value="true">
+            Storm Control
+        </label>
+        <label>
+            Level
+            <input type="text" name="storm_control_level" value="1.00" placeholder="1.00">
+        </label>
+    </div>
+    <label>
+        Notes
+        <input type="text" name="notes" placeholder="Optional notes">
+    </label>
+    <button type="submit" style="width:auto;">Add Policy</button>
+</form>

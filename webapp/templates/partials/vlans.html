@@ -1,0 +1,141 @@
+<h3>VLANs ({{ vlans | length }})</h3>
+
+{% if vlans %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>VLAN</th>
+            <th>Name</th>
+            <th>SVI IP</th>
+            <th>Location</th>
+            <th>DHCP</th>
+            <th>STP</th>
+            <th>Source</th>
+            <th>Overwrite</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for v in vlans %}
+        <tr>
+            <td>
+                <strong>{{ v.vlan_id }}</strong>
+                {% if v.dark_vlan %}<br><small style="color:var(--pico-muted-color);">dark</small>{% endif %}
+            </td>
+            <td>{{ v.name or "-" }}</td>
+            <td>{% if v.dark_vlan %}<small style="color:var(--pico-muted-color);">n/a</small>{% else %}{{ v.ip_address or "-" }}{% endif %}</td>
+            <td>
+                {% if v.dark_vlan %}
+                    <span class="badge">dark</span>
+                {% elif v.svi_location == "core" %}
+                    <span class="badge badge-ok">core</span>
+                {% elif v.svi_location == "edge" %}
+                    <span class="badge badge-warn">edge</span>
+                {% elif v.svi_location == "off-net" %}
+                    <span class="badge badge-err">off-net</span>
+                {% else %}
+                    <span class="badge">unknown</span>
+                {% endif %}
+                {% if v.svi_switch_hostname and not v.dark_vlan %}
+                    <small>{{ v.svi_switch_hostname }}</small>
+                {% endif %}
+            </td>
+            <td>
+                {% if v.dark_vlan %}-{% elif v.dhcp_servers %}
+                    {% for s in v.dhcp_servers | fromjson %}{{ s }}{% if not loop.last %}, {% endif %}{% endfor %}
+                {% else %}-{% endif %}
+            </td>
+            <td>{{ "Yes" if v.spanning_tree_enabled else "-" }}</td>
+            <td>{{ v.source }}</td>
+            <td style="font-size:0.75rem;">
+                {% if v.overwrite_name %}N{% endif %}
+                {% if v.overwrite_svi %}S{% endif %}
+                {% if v.overwrite_dhcp %}D{% endif %}
+                {% if v.overwrite_dns %}X{% endif %}
+            </td>
+            <td style="white-space:nowrap;">
+                <form hx-delete="/api/venues/{{ venue.id }}/vlans/{{ v.id }}"
+                      hx-target="#venue-vlans" hx-swap="innerHTML"
+                      hx-confirm="Delete VLAN {{ v.vlan_id }}?"
+                      style="margin:0;display:inline;">
+                    <button type="submit" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+<details>
+    <summary>Add VLAN</summary>
+    <form hx-post="/api/venues/{{ venue.id }}/vlans"
+          hx-target="#venue-vlans"
+          hx-swap="innerHTML"
+          style="margin-top:0.75rem;">
+        <div class="grid">
+            <label>
+                VLAN ID
+                <input type="number" name="vlan_id" placeholder="21" min="2" max="4094" required>
+            </label>
+            <label>
+                Name
+                <input type="text" name="name" placeholder="DATA">
+            </label>
+        </div>
+        <div class="checkbox-row">
+            <label>
+                <input type="checkbox" name="dark_vlan" value="on" onchange="toggleDarkVlan(this)">
+                Dark VLAN (no SVI on network)
+            </label>
+        </div>
+        <div class="svi-fields">
+            <div class="grid">
+                <label>
+                    SVI IP (CIDR)
+                    <input type="text" name="ip_address" placeholder="10.1.21.1/24">
+                </label>
+                <label>
+                    Gateway IP (Aruba)
+                    <input type="text" name="gateway_ip" placeholder="10.1.21.254">
+                </label>
+                <label>
+                    Gateway MAC (Aruba)
+                    <input type="text" name="gateway_mac" placeholder="00:00:5e:00:01:01">
+                </label>
+            </div>
+            <div class="grid">
+                <label>
+                    DHCP Servers
+                    <input type="text" name="dhcp_servers" placeholder="10.1.1.10, 10.1.1.11">
+                    <small class="field-help">Comma-separated</small>
+                </label>
+                <label>
+                    DNS Servers
+                    <input type="text" name="dns_servers" placeholder="10.1.1.10">
+                    <small class="field-help">Comma-separated</small>
+                </label>
+            </div>
+            <div class="checkbox-row">
+                <label>
+                    <input type="checkbox" name="igmp_enable" value="on">
+                    IGMP Enable
+                </label>
+                <label>
+                    <input type="checkbox" name="pim_sparse_enable" value="on">
+                    PIM Sparse Enable
+                </label>
+            </div>
+        </div>
+        <button type="submit" style="width:auto;">Add VLAN</button>
+    </form>
+</details>
+
+<script>
+function toggleDarkVlan(cb) {
+    const fields = cb.closest('form').querySelector('.svi-fields');
+    fields.style.display = cb.checked ? 'none' : '';
+}
+</script>

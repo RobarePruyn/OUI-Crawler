@@ -20,7 +20,7 @@ from oui_mapper_engine import (
 )
 from .config import settings
 from .database import SessionLocal
-from .db_models import ActionLog, DeviceResult, Job, SwitchResult
+from .db_models import ActionLog, DeviceResult, Job, SwitchResult, Venue
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,28 @@ class JobManager:
 
             self._mark_completed(db, job_id, progress.switches_visited, progress.devices_found)
 
+            # Merge discovered devices into venue port state
+            job = db.query(Job).get(job_id)
+            if job and job.venue_id:
+                try:
+                    from .port_merge import merge_discovered_ports
+                    merge_discovered_ports(db, job.venue_id, job_id, devices)
+                except Exception:
+                    logger.exception("Port merge failed for job %s", job_id)
+
+            # Auto-run compliance if linked to a venue
+            if job and job.venue_id:
+                try:
+                    from .compliance import check_vlan_compliance
+                    check_vlan_compliance(db, job_id, job.venue_id)
+                except Exception:
+                    logger.exception("Auto job compliance check failed for job %s", job_id)
+                try:
+                    from .compliance import check_venue_compliance
+                    check_venue_compliance(db, job.venue_id)
+                except Exception:
+                    logger.exception("Auto venue compliance check failed for job %s", job_id)
+
         except Exception as exc:
             logger.exception("Discovery job %s failed", job_id)
             self._mark_failed(db, job_id, str(exc))
@@ -142,6 +164,10 @@ class JobManager:
             platform = params.get("platform", "auto")
             forced_platform = None if platform == "auto" else platform
 
+            # Enable VLAN discovery when job is linked to a venue
+            job = db.query(Job).get(job_id)
+            venue_id = job.venue_id if job else None
+
             mapper = OUIPortMapper(
                 core_ip=params["core_ip"],
                 username=params["username"],
@@ -151,6 +177,7 @@ class JobManager:
                 oui_list=[],
                 max_workers=params.get("workers", 10),
                 mgmt_subnet=params.get("mgmt_subnet") or "",
+                discover_vlans=bool(venue_id),
                 progress_callback=on_progress,
             )
 
@@ -169,6 +196,24 @@ class JobManager:
                     upstream_ip=sw.upstream_ip,
                     upstream_interface=sw.upstream_interface,
                 ))
+
+            # Merge discovered switches into venue state
+            if venue_id and switches:
+                try:
+                    from .switch_merge import merge_discovered_switches
+                    merge_discovered_switches(db, venue_id, job_id, switches)
+                except Exception:
+                    logger.exception("Switch merge failed for job %s", job_id)
+
+            # Merge discovered VLANs into venue config
+            if venue_id and mapper.discovered_vlans:
+                try:
+                    from .vlan_merge import merge_discovered_vlans
+                    merge_discovered_vlans(
+                        db, venue_id, params["core_ip"], mapper.discovered_vlans,
+                    )
+                except Exception:
+                    logger.exception("VLAN merge failed for job %s", job_id)
 
             self._mark_completed(db, job_id, progress.switches_visited, 0)
 

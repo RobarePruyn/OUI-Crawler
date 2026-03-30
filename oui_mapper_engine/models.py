@@ -89,6 +89,26 @@ class ActionResult:
 
 
 @dataclass
+class VlanInfo:
+    """VLAN discovered from a switch during inventory crawl."""
+    vlan_id: int
+    name: str = ""
+    status: str = ""
+    switch_hostname: str = ""
+    switch_ip: str = ""
+    has_svi: bool = False
+    svi_ip_address: str = ""        # CIDR
+    svi_status: str = ""
+    dhcp_helpers: list[str] = field(default_factory=list)
+    vsx_sync: bool = False          # Aruba
+    active_gateway_ip: str = ""     # Aruba
+    active_gateway_mac: str = ""    # Aruba
+    spanning_tree_enabled: bool = False  # Aruba
+    igmp_enabled: bool = False
+    pim_sparse_enabled: bool = False
+
+
+@dataclass
 class DiffResult:
     """Result of comparing two sets of DeviceRecords."""
     added: list = field(default_factory=list)       # list[dict] - new devices

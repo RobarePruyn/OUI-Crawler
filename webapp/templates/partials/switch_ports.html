@@ -1,0 +1,91 @@
+{% if ports %}
+<table style="margin-bottom:0;">
+    <thead>
+        <tr>
+            <th>Interface</th>
+            <th>MAC</th>
+            <th>IP</th>
+            <th>VLAN</th>
+            <th>OUI</th>
+            <th>Last Seen</th>
+            <th>Notes</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in ports %}
+        <tr id="port-row-{{ p.id }}">
+            <td><strong>{{ p.interface }}</strong></td>
+            <td><code>{{ p.mac_address or "-" }}</code></td>
+            <td>{{ p.ip_address or "-" }}</td>
+            <td id="port-vlan-{{ p.id }}">{{ p.vlan or "-" }}</td>
+            <td>{% if p.matched_oui %}<code>{{ p.matched_oui }}</code>{% else %}-{% endif %}</td>
+            <td><small>{{ p.last_seen_at.strftime('%Y-%m-%d %H:%M') if p.last_seen_at else "-" }}</small></td>
+            <td>{% if p.notes %}<small style="color:var(--pico-muted-color);">{{ p.notes }}</small>{% else %}-{% endif %}</td>
+            <td style="white-space:nowrap;">
+                <div style="display:flex;gap:0.25rem;align-items:center;flex-wrap:wrap;">
+                    <select id="vlan-sel-{{ p.id }}" style="width:5rem;padding:0.15rem 0.3rem;margin:0;font-size:0.75rem;">
+                        <option value="">VLAN</option>
+                        {% for v in vlans %}
+                        <option value="{{ v.vlan_id }}"{% if p.vlan == v.vlan_id|string %} selected{% endif %}>{{ v.vlan_id }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" class="outline" style="padding:0.15rem 0.4rem;width:auto;font-size:0.7rem;margin:0;"
+                            onclick="portAction({{ p.id }}, {{ venue_id }}, 'vlan_assign')">Assign</button>
+                    <button type="button" class="outline secondary" style="padding:0.15rem 0.4rem;width:auto;font-size:0.7rem;margin:0;"
+                            onclick="portAction({{ p.id }}, {{ venue_id }}, 'shutdown')">Shut</button>
+                    <button type="button" class="outline secondary" style="padding:0.15rem 0.4rem;width:auto;font-size:0.7rem;margin:0;"
+                            onclick="portAction({{ p.id }}, {{ venue_id }}, 'no_shutdown')">No Shut</button>
+                    <button type="button" class="outline secondary" style="padding:0.15rem 0.4rem;width:auto;font-size:0.7rem;margin:0;"
+                            onclick="portAction({{ p.id }}, {{ venue_id }}, 'port_cycle')">Cycle</button>
+                </div>
+                <small id="port-result-{{ p.id }}" style="display:block;margin-top:0.2rem;"></small>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script>
+function portAction(portId, venueId, action) {
+    const confirmActions = {
+        'shutdown': 'Shut down this port?',
+        'port_cycle': 'Cycle this port (shutdown + wait + no shutdown)?',
+    };
+    if (confirmActions[action] && !confirm(confirmActions[action])) return;
+
+    const body = {action: action, save_config: false};
+    if (action === 'vlan_assign') {
+        const vlan = document.getElementById('vlan-sel-' + portId).value;
+        if (!vlan) return;
+        if (!confirm('Assign VLAN ' + vlan + ' to this port?')) return;
+        body.vlan = vlan;
+    }
+
+    const resultEl = document.getElementById('port-result-' + portId);
+    resultEl.innerHTML = '<span aria-busy="true"></span>';
+
+    fetch('/api/venues/' + venueId + '/ports/' + portId + '/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            resultEl.innerHTML = '<span style="color:var(--pico-ins-color);">' + data.message + '</span>';
+            if (action === 'vlan_assign' && body.vlan) {
+                document.getElementById('port-vlan-' + portId).textContent = body.vlan;
+            }
+        } else {
+            resultEl.innerHTML = '<span style="color:var(--pico-del-color);">' + data.message + '</span>';
+        }
+    })
+    .catch(err => {
+        resultEl.innerHTML = '<span style="color:var(--pico-del-color);">' + err.message + '</span>';
+    });
+}
+</script>
+{% else %}
+<p style="color:var(--pico-muted-color);margin:0;">No ports discovered on this switch. Run a discovery crawl to populate.</p>
+{% endif %}

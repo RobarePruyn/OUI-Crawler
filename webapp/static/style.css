@@ -147,3 +147,69 @@ table code {
 #delay-label, #template-group {
     transition: opacity 0.2s;
 }
+
+/* ── Tabs ───────────────────────────────────────────────────────────── */
+
+.tab-link {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    text-decoration: none;
+    cursor: pointer;
+}
+
+.tab-link.active {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+}
+
+/* ── Badges ────────────────────────────────────────────────────────── */
+
+.badge {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+}
+
+.badge-ok, .badge-online {
+    background: #2d6a4f;
+    color: #fff;
+}
+
+.badge-warn {
+    background: #e9c46a;
+    color: #000;
+}
+
+.badge-err {
+    background: #e76f51;
+    color: #fff;
+}
+
+.badge-offline {
+    background: #6c757d;
+    color: #fff;
+}
+
+/* ── Collapsible sections ───────────────────────────────────────────── */
+
+details.form-section > summary {
+    list-style: none;
+    cursor: pointer;
+}
+
+details.form-section > summary::-webkit-details-marker {
+    display: none;
+}
+
+details.form-section > summary h3::before {
+    content: "\25b6 ";
+    font-size: 0.7em;
+}
+
+details.form-section[open] > summary h3::before {
+    content: "\25bc ";
+}

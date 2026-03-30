@@ -20,6 +20,10 @@ job_manager = JobManager()
 async def lifespan(app: FastAPI):
     # Startup
     init_db()
+
+    from .oui_lookup import load_oui_database
+    load_oui_database()
+
     db = SessionLocal()
     password = ensure_default_admin(db)
     if password:
@@ -30,8 +34,13 @@ async def lifespan(app: FastAPI):
         print(f"  Change this after first login!")
         print(f"{'='*50}\n")
     db.close()
+
+    from .scheduler import init_scheduler, shutdown_scheduler
+    init_scheduler()
+
     yield
     # Shutdown
+    shutdown_scheduler()
     job_manager._pool.shutdown(wait=False)
 
 
@@ -47,11 +56,18 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # Register routes
-    from .routes import discovery, inventory, actions, history, pages
+    from .routes import discovery, inventory, actions, history, venues, oui_registry, schedules, compliance, lookup, vlans, switches, pages
     app.include_router(discovery.router)
     app.include_router(inventory.router)
     app.include_router(actions.router)
     app.include_router(history.router)
+    app.include_router(venues.router)
+    app.include_router(oui_registry.router)
+    app.include_router(schedules.router)
+    app.include_router(compliance.router)
+    app.include_router(lookup.router)
+    app.include_router(vlans.router)
+    app.include_router(switches.router)
     app.include_router(pages.router)
 
     # Redirect unauthenticated HTML requests to login page

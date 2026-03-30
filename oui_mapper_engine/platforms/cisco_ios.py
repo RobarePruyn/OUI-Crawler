@@ -1,6 +1,7 @@
 """Cisco IOS / IOS-XE platform implementation."""
+import ipaddress
 import re
-from ..models import MacEntry, Neighbor
+from ..models import MacEntry, Neighbor, VlanInfo
 from . import SwitchPlatform
 
 
@@ -41,6 +42,214 @@ class CiscoIOSPlatform(SwitchPlatform):
             "spanning-tree portfast",
             "spanning-tree bpduguard enable",
         ]
+
+    def get_interface_config_command(self, interface: str) -> str:
+        return f"show running-config interface {interface}"
+
+    def get_interface_stats_command(self, interface: str) -> str:
+        return f"show interface {interface}"
+
+    def parse_interface_stats(self, raw_output: str) -> dict:
+        """
+        Parse Cisco IOS/IOS-XE 'show interface X' output.
+
+        Extracts status, rates, and error counters from the well-known
+        IOS interface detail format.
+        """
+        stats: dict = {}
+
+        # Line 1: "GigabitEthernet1/0/1 is up, line protocol is up (connected)"
+        status_match = re.search(
+            r'(\S+) is (administratively )?(up|down),\s+line protocol is (up|down)',
+            raw_output
+        )
+        if status_match:
+            admin = "administratively down" if status_match.group(2) else status_match.group(3)
+            stats["status"] = admin
+            stats["protocol_status"] = status_match.group(4)
+
+        # Description
+        desc_match = re.search(r'Description:\s*(.+)', raw_output)
+        if desc_match:
+            stats["description"] = desc_match.group(1).strip()
+
+        # 30-second rates
+        rate_30_in = re.search(
+            r'30 second input rate\s+(\d+)\s+bits/sec,\s+(\d+)\s+packets/sec',
+            raw_output
+        )
+        if rate_30_in:
+            stats["input_rate_30sec"] = f"{rate_30_in.group(1)} bits/sec"
+            stats["input_packets_sec"] = int(rate_30_in.group(2))
+
+        rate_30_out = re.search(
+            r'30 second output rate\s+(\d+)\s+bits/sec,\s+(\d+)\s+packets/sec',
+            raw_output
+        )
+        if rate_30_out:
+            stats["output_rate_30sec"] = f"{rate_30_out.group(1)} bits/sec"
+            stats["output_packets_sec"] = int(rate_30_out.group(2))
+
+        # 5-minute rates (IOS-XE includes these)
+        rate_5_in = re.search(
+            r'5 minute input rate\s+(\d+)\s+bits/sec', raw_output
+        )
+        if rate_5_in:
+            stats["input_rate_5min"] = f"{rate_5_in.group(1)} bits/sec"
+
+        rate_5_out = re.search(
+            r'5 minute output rate\s+(\d+)\s+bits/sec', raw_output
+        )
+        if rate_5_out:
+            stats["output_rate_5min"] = f"{rate_5_out.group(1)} bits/sec"
+
+        # Packet counters
+        in_packets = re.search(r'(\d+) packets input', raw_output)
+        if in_packets:
+            stats["input_packets"] = int(in_packets.group(1))
+
+        out_packets = re.search(r'(\d+) packets output', raw_output)
+        if out_packets:
+            stats["output_packets"] = int(out_packets.group(1))
+
+        # Error counters
+        in_errors = re.search(r'(\d+) input errors', raw_output)
+        if in_errors:
+            stats["input_errors"] = int(in_errors.group(1))
+
+        out_errors = re.search(r'(\d+) output errors', raw_output)
+        if out_errors:
+            stats["output_errors"] = int(out_errors.group(1))
+
+        crc = re.search(r'(\d+) CRC', raw_output)
+        if crc:
+            stats["crc_errors"] = int(crc.group(1))
+
+        return stats
+
+    # ── VLAN discovery ──────────────────────────────────────────────
+
+    def get_vlan_brief_command(self) -> str:
+        return "show vlan brief"
+
+    def get_svi_config_command(self) -> str:
+        return "show running-config | section interface Vlan"
+
+    def parse_vlan_brief(self, raw_output: str, hostname: str = "", ip: str = "") -> list[VlanInfo]:
+        """
+        Parse IOS/IOS-XE 'show vlan brief' output.
+
+        Format:
+          VLAN Name                             Status    Ports
+          ---- -------------------------------- --------- --------------------
+          1    default                          active    Gi1/0/1, Gi1/0/2
+          10   DATA                             active
+          1002 fddi-default                     act/unsup
+        """
+        entries = []
+        # Skip VLAN 1 and the reserved range 1002-1005
+        skip_vlans = {1, 1002, 1003, 1004, 1005}
+        pattern = re.compile(
+            r'^(\d+)\s+(\S+)\s+(active|sus|act/unsup)',
+            re.MULTILINE
+        )
+        for match in pattern.finditer(raw_output):
+            vlan_id = int(match.group(1))
+            if vlan_id in skip_vlans:
+                continue
+            entries.append(VlanInfo(
+                vlan_id=vlan_id,
+                name=match.group(2),
+                status=match.group(3),
+                switch_hostname=hostname,
+                switch_ip=ip,
+            ))
+        return entries
+
+    def parse_svi_config(self, raw_output: str, vlan_map: dict[int, VlanInfo]) -> dict[int, VlanInfo]:
+        """
+        Parse IOS 'show running-config | section interface Vlan' output.
+        Enriches vlan_map entries with SVI details.
+
+        Splits on 'interface Vlan' boundaries, extracts:
+          ip address, ip helper-address, ip igmp, ip pim sparse-mode
+        """
+        blocks = re.split(r'(?=^interface Vlan)', raw_output, flags=re.MULTILINE)
+        for block in blocks:
+            header = re.match(r'interface Vlan(\d+)', block)
+            if not header:
+                continue
+            vlan_id = int(header.group(1))
+            if vlan_id not in vlan_map:
+                continue
+
+            info = vlan_map[vlan_id]
+            info.has_svi = True
+
+            # "ip address 10.1.21.1 255.255.255.0"
+            ip_match = re.search(r'ip address (\d+\.\d+\.\d+\.\d+)\s+(\d+\.\d+\.\d+\.\d+)', block)
+            if ip_match:
+                try:
+                    net = ipaddress.IPv4Network(f"{ip_match.group(1)}/{ip_match.group(2)}", strict=False)
+                    info.svi_ip_address = f"{ip_match.group(1)}/{net.prefixlen}"
+                except ValueError:
+                    info.svi_ip_address = f"{ip_match.group(1)}/{ip_match.group(2)}"
+
+            # "shutdown" or absence thereof
+            if re.search(r'^\s+shutdown\s*$', block, re.MULTILINE):
+                info.svi_status = "shutdown"
+            else:
+                info.svi_status = "up"
+
+            # DHCP helpers: "ip helper-address 10.1.1.10"
+            for helper in re.finditer(r'ip helper-address (\d+\.\d+\.\d+\.\d+)', block):
+                info.dhcp_helpers.append(helper.group(1))
+
+            # IGMP
+            if re.search(r'ip igmp', block):
+                info.igmp_enabled = True
+
+            # PIM sparse-mode
+            if re.search(r'ip pim sparse-mode', block):
+                info.pim_sparse_enabled = True
+
+        return vlan_map
+
+    # ── VLAN provisioning ───────────────────────────────────────────
+
+    def get_vlan_create_commands(self, vlan_id: int, name: str = "") -> list[str]:
+        cmds = [f"vlan {vlan_id}"]
+        if name:
+            cmds.append(f" name {name}")
+        return cmds
+
+    def get_svi_create_commands(
+        self,
+        vlan_id: int,
+        ip_address: str = "",
+        gateway_ip: str = "",
+        gateway_mac: str = "",
+        dhcp_servers: list[str] | None = None,
+        igmp: bool = False,
+        pim_sparse: bool = False,
+    ) -> list[str]:
+        """Build IOS SVI config commands. ip_address is CIDR (e.g. 10.1.21.1/24)."""
+        cmds = [f"interface Vlan{vlan_id}"]
+        if ip_address:
+            try:
+                iface = ipaddress.IPv4Interface(ip_address)
+                cmds.append(f" ip address {iface.ip} {iface.netmask}")
+            except ValueError:
+                pass
+        if dhcp_servers:
+            for server in dhcp_servers:
+                cmds.append(f" ip helper-address {server}")
+        if igmp:
+            cmds.append(" ip igmp join-group 224.0.0.0")
+        if pim_sparse:
+            cmds.append(" ip pim sparse-mode")
+        cmds.append(" no shutdown")
+        return cmds
 
     def parse_mac_table(self, raw_output: str) -> list[MacEntry]:
         """

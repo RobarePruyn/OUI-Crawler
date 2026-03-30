@@ -9,12 +9,15 @@ from sqlalchemy.orm import Session
 
 from ..auth import User, authenticate_user, get_current_user, hash_password, verify_password
 from ..database import get_db
-from ..db_models import DeviceResult, Job, SwitchResult, ActionLog
+from ..db_models import ChangeLog, ComplianceResult, DeviceResult, Job, OUIEntry, PortPolicy, Schedule, SwitchResult, ActionLog, Venue, VenuePort, VenueSwitch, VenueVlan
 from ..db_models import User as UserModel
+
+import json as _json
 
 router = APIRouter(tags=["pages"])
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
+templates.env.filters["fromjson"] = lambda s: _json.loads(s) if s else []
 
 
 def _render(request: Request, template: str, context: dict = None, status_code: int = 200):
@@ -65,8 +68,10 @@ def dashboard(
 def discovery_page(
     request: Request,
     user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    return _render(request, "discovery.html", {"user": user})
+    venues = db.query(Venue).order_by(Venue.name).all()
+    return _render(request, "discovery.html", {"user": user, "venues": venues})
 
 
 # ── Inventory ────────────────────────────────────────────────────────
@@ -75,8 +80,22 @@ def discovery_page(
 def inventory_page(
     request: Request,
     user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
-    return _render(request, "inventory.html", {"user": user})
+    venues = db.query(Venue).order_by(Venue.name).all()
+    return _render(request, "inventory.html", {"user": user, "venues": venues})
+
+
+# ── Device Lookup ───────────────────────────────────────────────────
+
+@router.get("/lookup", response_class=HTMLResponse)
+def lookup_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venues = db.query(Venue).order_by(Venue.name).all()
+    return _render(request, "lookup.html", {"user": user, "venues": venues})
 
 
 # ── Job Detail ───────────────────────────────────────────────────────
@@ -148,6 +167,358 @@ def diff_page(
         .all()
     )
     return _render(request, "diff.html", {"user": user, "jobs": discovery_jobs})
+
+
+# ── Venues ───────────────────────────────────────────────────────────
+
+@router.get("/venues", response_class=HTMLResponse)
+def venues_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venues = db.query(Venue).order_by(Venue.name).all()
+    return _render(request, "venues.html", {"user": user, "venues": venues})
+
+
+@router.get("/venues/new", response_class=HTMLResponse)
+def venue_new_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    return _render(request, "venue_detail.html", {"user": user, "venue": None})
+
+
+@router.post("/venues", response_class=HTMLResponse)
+async def venue_create_action(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..crypto import encrypt_credential
+    form = await request.form()
+
+    name = form.get("name", "").strip()
+    if not name:
+        return _render(request, "venue_detail.html", {"user": user, "venue": None, "message": "Name is required.", "error": True})
+
+    if db.query(Venue).filter(Venue.name == name).first():
+        return _render(request, "venue_detail.html", {"user": user, "venue": None, "message": f"Venue '{name}' already exists.", "error": True})
+
+    ssh_password = form.get("ssh_password", "")
+    if not ssh_password:
+        return _render(request, "venue_detail.html", {"user": user, "venue": None, "message": "SSH password is required.", "error": True})
+
+    enable_secret = form.get("enable_secret", "").strip()
+
+    dhcp_raw = form.get("default_dhcp_servers", "").strip()
+    dns_raw = form.get("default_dns_servers", "").strip()
+
+    venue = Venue(
+        name=name,
+        core_ip=form.get("core_ip", "").strip(),
+        platform=form.get("platform", "auto"),
+        ssh_username=form.get("ssh_username", "").strip(),
+        ssh_password_enc=encrypt_credential(ssh_password),
+        enable_secret_enc=encrypt_credential(enable_secret) if enable_secret else None,
+        mgmt_subnet=form.get("mgmt_subnet", "").strip() or None,
+        fan_out="fan_out" in form,
+        workers=int(form.get("workers", 10)),
+        mac_threshold=int(form.get("mac_threshold", 1)),
+        default_dhcp_servers=_json.dumps([s.strip() for s in dhcp_raw.split(",") if s.strip()]) if dhcp_raw else None,
+        default_dns_servers=_json.dumps([s.strip() for s in dns_raw.split(",") if s.strip()]) if dns_raw else None,
+        default_gateway_mac=form.get("default_gateway_mac", "").strip() or None,
+    )
+    db.add(venue)
+    db.commit()
+    db.refresh(venue)
+    return RedirectResponse(f"/venues/{venue.id}", status_code=303)
+
+
+@router.get("/venues/{venue_id}", response_class=HTMLResponse)
+def venue_detail_page(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    return _render(request, "venue_detail.html", {"user": user, "venue": venue})
+
+
+@router.post("/venues/{venue_id}", response_class=HTMLResponse)
+async def venue_update_action(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..crypto import encrypt_credential
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    form = await request.form()
+    name = form.get("name", "").strip()
+
+    if name and name != venue.name:
+        if db.query(Venue).filter(Venue.name == name, Venue.id != venue_id).first():
+            return _render(request, "venue_detail.html", {"user": user, "venue": venue, "message": f"Venue '{name}' already exists.", "error": True})
+        venue.name = name
+
+    venue.core_ip = form.get("core_ip", venue.core_ip).strip()
+    venue.platform = form.get("platform", venue.platform)
+    venue.ssh_username = form.get("ssh_username", venue.ssh_username).strip()
+    venue.mgmt_subnet = form.get("mgmt_subnet", "").strip() or None
+    venue.fan_out = "fan_out" in form
+    venue.workers = int(form.get("workers", venue.workers))
+    venue.mac_threshold = int(form.get("mac_threshold", venue.mac_threshold))
+
+    # Default SVI settings
+    dhcp_raw = form.get("default_dhcp_servers", "").strip()
+    venue.default_dhcp_servers = _json.dumps([s.strip() for s in dhcp_raw.split(",") if s.strip()]) if dhcp_raw else None
+    dns_raw = form.get("default_dns_servers", "").strip()
+    venue.default_dns_servers = _json.dumps([s.strip() for s in dns_raw.split(",") if s.strip()]) if dns_raw else None
+    venue.default_gateway_mac = form.get("default_gateway_mac", "").strip() or None
+
+    ssh_password = form.get("ssh_password", "").strip()
+    if ssh_password:
+        venue.ssh_password_enc = encrypt_credential(ssh_password)
+
+    enable_secret = form.get("enable_secret", "").strip()
+    if enable_secret:
+        venue.enable_secret_enc = encrypt_credential(enable_secret)
+
+    db.commit()
+    return _render(request, "venue_detail.html", {"user": user, "venue": venue, "message": "Venue updated."})
+
+
+@router.post("/venues/{venue_id}/delete")
+def venue_delete_action(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    db.delete(venue)
+    db.commit()
+    return RedirectResponse("/venues", status_code=303)
+
+
+# ── Venue partials (OUI, Schedules, Policies) ───────────────────────
+
+@router.get("/partials/oui-registry/{venue_id}", response_class=HTMLResponse)
+def oui_registry_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    entries = db.query(OUIEntry).filter(OUIEntry.venue_id == venue_id).all()
+    return _render(request, "partials/oui_registry.html", {"venue": venue, "entries": entries})
+
+
+@router.get("/partials/schedules/{venue_id}", response_class=HTMLResponse)
+def schedules_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    schedules = db.query(Schedule).filter(Schedule.venue_id == venue_id).all()
+    return _render(request, "partials/schedules.html", {"venue": venue, "schedules": schedules})
+
+
+@router.get("/partials/port-policies/{venue_id}", response_class=HTMLResponse)
+def port_policies_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    policies = db.query(PortPolicy).filter(PortPolicy.venue_id == venue_id).all()
+    return _render(request, "partials/port_policies.html", {"venue": venue, "policies": policies})
+
+
+@router.get("/partials/vlans/{venue_id}", response_class=HTMLResponse)
+def vlans_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    vlans = db.query(VenueVlan).filter(VenueVlan.venue_id == venue_id).order_by(VenueVlan.vlan_id).all()
+    return _render(request, "partials/vlans.html", {"venue": venue, "vlans": vlans})
+
+
+@router.get("/partials/switches/{venue_id}", response_class=HTMLResponse)
+def switches_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    switches = (
+        db.query(VenueSwitch)
+        .filter(VenueSwitch.venue_id == venue_id)
+        .order_by(VenueSwitch.hostname)
+        .all()
+    )
+    return _render(request, "partials/switches.html", {"venue": venue, "switches": switches})
+
+
+@router.get("/partials/switches/{venue_id}/{switch_id}/ports", response_class=HTMLResponse)
+def switch_ports_partial(
+    venue_id: int,
+    switch_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    switch = (
+        db.query(VenueSwitch)
+        .filter(VenueSwitch.id == switch_id, VenueSwitch.venue_id == venue_id)
+        .first()
+    )
+    if not switch:
+        raise HTTPException(status_code=404)
+    ports = (
+        db.query(VenuePort)
+        .filter(VenuePort.switch_id == switch_id)
+        .order_by(VenuePort.interface)
+        .all()
+    )
+    vlans = db.query(VenueVlan).filter(VenueVlan.venue_id == venue_id).order_by(VenueVlan.vlan_id).all()
+    return _render(request, "partials/switch_ports.html", {"switch": switch, "ports": ports, "venue_id": venue_id, "vlans": vlans})
+
+
+@router.get("/partials/timeline/{venue_id}", response_class=HTMLResponse)
+def timeline_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    changes = (
+        db.query(ChangeLog)
+        .filter(ChangeLog.venue_id == venue_id)
+        .order_by(ChangeLog.created_at.desc())
+        .limit(200)
+        .all()
+    )
+
+    # Enrich with entity labels for display
+    switch_names: dict[int, str] = {}
+    port_labels: dict[int, str] = {}
+    vlan_labels: dict[int, str] = {}
+
+    for c in changes:
+        if c.entity_type == "switch" and c.entity_id not in switch_names:
+            sw = db.query(VenueSwitch).get(c.entity_id)
+            switch_names[c.entity_id] = sw.hostname if sw else f"(deleted #{c.entity_id})"
+        elif c.entity_type == "port" and c.entity_id not in port_labels:
+            port = db.query(VenuePort).get(c.entity_id)
+            if port:
+                sw = db.query(VenueSwitch).get(port.switch_id)
+                port_labels[c.entity_id] = f"{port.interface} on {sw.hostname}" if sw else port.interface
+            else:
+                port_labels[c.entity_id] = f"(deleted #{c.entity_id})"
+        elif c.entity_type == "vlan" and c.entity_id not in vlan_labels:
+            vlan = db.query(VenueVlan).get(c.entity_id)
+            vlan_labels[c.entity_id] = f"VLAN {vlan.vlan_id}" if vlan else f"(deleted #{c.entity_id})"
+
+    for c in changes:
+        if c.entity_type == "switch":
+            c._entity_label = switch_names.get(c.entity_id, "")
+        elif c.entity_type == "port":
+            c._entity_label = port_labels.get(c.entity_id, "")
+        elif c.entity_type == "vlan":
+            c._entity_label = vlan_labels.get(c.entity_id, "")
+        else:
+            c._entity_label = ""
+
+    return _render(request, "partials/timeline.html", {"venue": venue, "changes": changes})
+
+
+# ── Compliance ──────────────────────────────────────────────────────
+
+@router.get("/compliance/{job_id}", response_class=HTMLResponse)
+def compliance_page(
+    job_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    job = db.query(Job).get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    results = db.query(ComplianceResult).filter(ComplianceResult.job_id == job_id).all()
+    ok_count = sum(1 for r in results if r.severity == "ok")
+    warn_count = sum(1 for r in results if r.severity == "warning")
+    crit_count = sum(1 for r in results if r.severity == "critical")
+    return _render(request, "compliance.html", {
+        "user": user, "job": job, "results": results,
+        "ok_count": ok_count, "warn_count": warn_count, "crit_count": crit_count,
+    })
+
+
+@router.get("/venues/{venue_id}/compliance", response_class=HTMLResponse)
+def venue_compliance_page(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    results = db.query(ComplianceResult).filter(
+        ComplianceResult.venue_id == venue_id,
+        ComplianceResult.job_id.is_(None),
+    ).all()
+    ok_count = sum(1 for r in results if r.severity == "ok")
+    warn_count = sum(1 for r in results if r.severity == "warning")
+    return _render(request, "venue_compliance.html", {
+        "user": user, "venue": venue, "results": results,
+        "ok_count": ok_count, "warn_count": warn_count,
+    })
+
+
+@router.post("/api/venues/{venue_id}/compliance")
+def run_venue_compliance(
+    venue_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    from ..compliance import check_venue_compliance
+    results = check_venue_compliance(db, venue_id)
+    return {"ok": True, "count": len(results)}
 
 
 # ── Settings ─────────────────────────────────────────────────────────

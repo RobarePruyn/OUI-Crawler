@@ -1,0 +1,90 @@
+<h3>Timeline ({{ changes | length }}{% if changes | length >= 200 %}+{% endif %})</h3>
+
+{% if changes %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>Type</th>
+            <th>Entity</th>
+            <th>Change</th>
+            <th>Detail</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for c in changes %}
+        <tr>
+            <td><small>{{ c.created_at.strftime('%m-%d %H:%M') }}</small></td>
+            <td>
+                {% if c.change_type == "created" %}
+                    <span class="badge badge-ok">new</span>
+                {% elif c.change_type == "updated" %}
+                    <span class="badge badge-warn">changed</span>
+                {% elif c.change_type == "offline" %}
+                    <span class="badge badge-offline">offline</span>
+                {% elif c.change_type == "deleted" %}
+                    <span class="badge badge-err">deleted</span>
+                {% else %}
+                    <span class="badge">{{ c.change_type }}</span>
+                {% endif %}
+            </td>
+            <td>
+                <strong>{{ c.entity_type }}</strong>
+                {% if c._entity_label %}<br><small>{{ c._entity_label }}</small>{% endif %}
+            </td>
+            <td>
+                {% if c.change_type == "created" %}
+                    {{ c.entity_type }} discovered
+                {% elif c.field_name %}
+                    <code>{{ c.field_name }}</code>
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>
+                {% if c.old_value and c.new_value %}
+                    {{ c.old_value }} &rarr; {{ c.new_value }}
+                {% elif c.new_value %}
+                    {{ c.new_value }}
+                {% elif c.old_value %}
+                    <del>{{ c.old_value }}</del>
+                {% else %}
+                    -
+                {% endif %}
+            </td>
+            <td>
+                {% if c.entity_type == "port" and c.field_name == "vlan" and c.old_value and c.change_type == "updated" %}
+                    <button type="button" class="outline secondary" style="padding:0.1rem 0.3rem;width:auto;font-size:0.7rem;margin:0;"
+                            onclick="revertVlan({{ c.entity_id }}, {{ venue.id }}, '{{ c.old_value }}')">Revert</button>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% else %}
+<p style="color:var(--pico-muted-color);">No changes recorded yet. Run crawls to start tracking changes.</p>
+{% endif %}
+
+<script>
+function revertVlan(portId, venueId, oldVlan) {
+    if (!confirm('Revert port to VLAN ' + oldVlan + '?')) return;
+    fetch('/api/venues/' + venueId + '/ports/' + portId + '/action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({action: 'vlan_assign', vlan: oldVlan}),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.status === 'ok') {
+            alert('Reverted to VLAN ' + oldVlan);
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(err => { alert('Error: ' + err.message); });
+}
+</script>

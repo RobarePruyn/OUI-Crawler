@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     # Session
     session_expire_minutes: int = 480  # 8 hours
 
+    # OUI database
+    oui_csv_path: Path = Path(__file__).resolve().parent.parent / "data" / "oui.csv"
+
+    # Scheduler
+    scheduler_enabled: bool = True
+
     model_config = {"env_prefix": "OUI_MAPPER_"}
 
 

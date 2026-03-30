@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% set active_page = "venues" %}
+{% block title %}Compliance Report - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Compliance Report</h1>
+<p>Job: <code>{{ job.id[:8] }}</code> &mdash; {{ job.core_ip }} &mdash; {{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else "" }}</p>
+
+<div class="grid">
+    <article>
+        <header>OK</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-ins-color);">{{ ok_count }}</p>
+    </article>
+    <article>
+        <header>Warnings</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-mark-background-color, orange);">{{ warn_count }}</p>
+    </article>
+    <article>
+        <header>Critical</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-del-color);">{{ crit_count }}</p>
+    </article>
+</div>
+
+{% if not results %}
+<p>No compliance results for this job.
+{% if job.venue_id %}
+<button class="outline" onclick="runCheck()">Run VLAN Compliance Check</button>
+{% else %}
+This job is not linked to a venue.
+{% endif %}
+</p>
+{% else %}
+
+{% set violations = results | selectattr("severity", "ne", "ok") | list %}
+{% if violations %}
+<h2>VLAN Violations ({{ violations | length }})</h2>
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Switch</th>
+            <th>Interface</th>
+            <th>MAC</th>
+            <th>Current VLAN</th>
+            <th>Expected VLAN</th>
+            <th>Detail</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in violations %}
+        <tr>
+            <td>{{ r.switch_hostname or r.switch_ip }}</td>
+            <td>{{ r.interface }}</td>
+            <td><code>{{ r.mac_address }}</code></td>
+            <td>
+                {% if r.severity == "warning" %}<mark>{{ r.current_value }}</mark>
+                {% elif r.severity == "critical" %}<mark style="background:var(--pico-del-color);color:#fff;">{{ r.current_value }}</mark>
+                {% else %}{{ r.current_value }}{% endif %}
+            </td>
+            <td>{{ r.expected_value }}</td>
+            <td>{{ r.detail }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% set passing = results | selectattr("severity", "eq", "ok") | list %}
+{% if passing %}
+<details>
+    <summary>Passing Checks ({{ passing | length }})</summary>
+    <figure>
+    <table>
+        <thead>
+            <tr>
+                <th>Switch</th>
+                <th>Interface</th>
+                <th>MAC</th>
+                <th>VLAN</th>
+                <th>Detail</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in passing %}
+            <tr>
+                <td>{{ r.switch_hostname or r.switch_ip }}</td>
+                <td>{{ r.interface }}</td>
+                <td><code>{{ r.mac_address }}</code></td>
+                <td>{{ r.current_value }}</td>
+                <td>{{ r.detail }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </figure>
+</details>
+{% endif %}
+{% endif %}
+
+<script>
+function runCheck() {
+    fetch('/api/compliance/vlan-check/{{ job.id }}', {method: 'POST'})
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(() => { location.reload(); })
+        .catch(err => { alert('Error: ' + err.message); });
+}
+</script>
+
+<p>
+    <a href="/jobs/{{ job.id }}">&larr; Back to Job</a>
+    {% if job.venue_id %} | <a href="/venues/{{ job.venue_id }}">Back to Venue</a>{% endif %}
+</p>
+{% endblock %}

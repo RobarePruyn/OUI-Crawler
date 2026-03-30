@@ -1,0 +1,78 @@
+<h3>Schedules ({{ schedules | length }})</h3>
+
+{% if schedules %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Type</th>
+            <th>Time</th>
+            <th>Enabled</th>
+            <th>Last Run</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in schedules %}
+        <tr>
+            <td>{{ s.job_type | title }}</td>
+            <td>{{ s.time_of_day }}</td>
+            <td>
+                <form hx-put="/api/venues/{{ venue.id }}/schedules/{{ s.id }}"
+                      hx-target="#schedules" hx-swap="innerHTML"
+                      hx-vals='{"enabled": {{ "false" if s.enabled else "true" }}}'
+                      style="margin:0;">
+                    <button type="submit" class="{{ 'outline' if not s.enabled }}" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">
+                        {{ "On" if s.enabled else "Off" }}
+                    </button>
+                </form>
+            </td>
+            <td>
+                {% if s.last_run_at %}
+                {{ s.last_run_at.strftime('%Y-%m-%d %H:%M') }}
+                {% if s.last_job_id %}
+                <a href="/jobs/{{ s.last_job_id }}">(view)</a>
+                {% endif %}
+                {% else %}
+                Never
+                {% endif %}
+            </td>
+            <td style="display:flex;gap:0.25rem;">
+                <form hx-post="/api/venues/{{ venue.id }}/schedules/{{ s.id }}/run-now"
+                      style="margin:0;">
+                    <button type="submit" class="outline" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Run Now</button>
+                </form>
+                <form hx-delete="/api/venues/{{ venue.id }}/schedules/{{ s.id }}"
+                      hx-target="#schedules" hx-swap="innerHTML"
+                      hx-confirm="Delete this schedule?"
+                      style="margin:0;">
+                    <button type="submit" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+<form hx-post="/api/venues/{{ venue.id }}/schedules"
+      hx-target="#schedules"
+      hx-swap="innerHTML">
+    <div class="grid">
+        <label>
+            Job Type
+            <select name="job_type">
+                <option value="discovery">Discovery</option>
+                <option value="inventory">Inventory</option>
+            </select>
+        </label>
+        <label>
+            Time of Day
+            <input type="time" name="time_of_day" value="06:00" required>
+        </label>
+        <label style="display:flex;align-items:end;">
+            <button type="submit" style="width:auto;">Add Schedule</button>
+        </label>
+    </div>
+</form>

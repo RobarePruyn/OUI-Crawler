@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% set active_page = "venues" %}
+{% block title %}Compliance - {{ venue.name }} - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Compliance: {{ venue.name }}</h1>
+<p>Based on persistent port state &mdash; last updated from discovery crawls.</p>
+
+<div class="grid">
+    <article>
+        <header>OK</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-ins-color);">{{ ok_count }}</p>
+    </article>
+    <article>
+        <header>Warnings</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-mark-background-color, orange);">{{ warn_count }}</p>
+    </article>
+</div>
+
+{% if not results %}
+<p>No compliance data. Run a discovery crawl to populate port state, then
+<button class="outline" style="width:auto;" onclick="runCheck()">Run Compliance Check</button></p>
+{% else %}
+
+<div style="margin-bottom:1rem;">
+    <button class="outline" style="width:auto;" onclick="runCheck()">Re-run Compliance Check</button>
+</div>
+
+{% set violations = results | selectattr("severity", "ne", "ok") | list %}
+{% if violations %}
+<h2>Violations ({{ violations | length }})</h2>
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Switch</th>
+            <th>Interface</th>
+            <th>MAC</th>
+            <th>Current</th>
+            <th>Expected</th>
+            <th>Detail</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in violations %}
+        <tr>
+            <td>{{ r.switch_hostname or r.switch_ip }}</td>
+            <td>{{ r.interface }}</td>
+            <td><code>{{ r.mac_address }}</code></td>
+            <td><mark>{{ r.current_value }}</mark></td>
+            <td>{{ r.expected_value }}</td>
+            <td>{{ r.detail }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% set passing = results | selectattr("severity", "eq", "ok") | list %}
+{% if passing %}
+<details>
+    <summary>Passing ({{ passing | length }})</summary>
+    <figure>
+    <table>
+        <thead>
+            <tr>
+                <th>Switch</th>
+                <th>Interface</th>
+                <th>MAC</th>
+                <th>VLAN</th>
+                <th>Detail</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in passing %}
+            <tr>
+                <td>{{ r.switch_hostname or r.switch_ip }}</td>
+                <td>{{ r.interface }}</td>
+                <td><code>{{ r.mac_address }}</code></td>
+                <td>{{ r.current_value }}</td>
+                <td>{{ r.detail }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </figure>
+</details>
+{% endif %}
+{% endif %}
+
+<script>
+function runCheck() {
+    fetch('/api/venues/{{ venue.id }}/compliance', {method: 'POST'})
+        .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+        .then(() => { location.reload(); })
+        .catch(err => { alert('Error: ' + err.message); });
+}
+</script>
+
+<p><a href="/venues/{{ venue.id }}">&larr; Back to Venue</a></p>
+{% endblock %}

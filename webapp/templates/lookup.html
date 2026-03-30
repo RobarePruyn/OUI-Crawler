@@ -1,0 +1,350 @@
+{% extends "base.html" %}
+{% set active_page = "lookup" %}
+{% block title %}Device Lookup - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Device Lookup</h1>
+
+<div class="form-section">
+    <h3>Search</h3>
+    <div class="grid">
+        <label class="required">
+            Venue
+            <select id="venue-select" required>
+                <option value="">-- Select venue --</option>
+                {% for v in venues %}
+                <option value="{{ v.id }}">{{ v.name }} ({{ v.core_ip }})</option>
+                {% endfor %}
+            </select>
+            <small class="field-help">Credentials and core switch come from the venue</small>
+        </label>
+        <label class="required">
+            MAC or IP Address
+            <input type="text" id="search-term" placeholder="00:1A:2B:3C:4D:5E or 10.1.1.100" required>
+            <small class="field-help">Enter a MAC address (any format) or an IP address</small>
+        </label>
+    </div>
+    <button type="button" id="btn-lookup" class="btn-primary" disabled>Lookup</button>
+</div>
+
+<div id="lookup-result" style="display:none;">
+    <div id="lookup-warnings"></div>
+
+    <div class="form-section" id="result-summary">
+        <h3>Device Info</h3>
+        <div class="grid">
+            <div>
+                <table>
+                    <tbody>
+                        <tr><th>MAC Address</th><td id="r-mac"></td></tr>
+                        <tr><th>IP Address</th><td id="r-ip"></td></tr>
+                        <tr><th>Switch</th><td id="r-switch"></td></tr>
+                        <tr><th>Interface</th><td id="r-intf"></td></tr>
+                        <tr><th>VLAN</th><td id="r-vlan"></td></tr>
+                        <tr><th>Platform</th><td id="r-platform"></td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div>
+                <table id="stats-table">
+                    <tbody>
+                        <tr><th>Status</th><td id="r-status"></td></tr>
+                        <tr><th>Description</th><td id="r-desc"></td></tr>
+                        <tr><th>Input Rate (30s)</th><td id="r-in-30"></td></tr>
+                        <tr><th>Output Rate (30s)</th><td id="r-out-30"></td></tr>
+                        <tr><th>Input Rate (5m)</th><td id="r-in-5"></td></tr>
+                        <tr><th>Output Rate (5m)</th><td id="r-out-5"></td></tr>
+                        <tr><th>Input Errors</th><td id="r-in-err"></td></tr>
+                        <tr><th>Output Errors</th><td id="r-out-err"></td></tr>
+                        <tr><th>CRC Errors</th><td id="r-crc"></td></tr>
+                        <tr><th>Input Packets</th><td id="r-in-pkt"></td></tr>
+                        <tr><th>Output Packets</th><td id="r-out-pkt"></td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="oui-match-section" style="display:none;" class="form-section">
+        <h3>OUI Match</h3>
+        <p id="oui-match-text"></p>
+    </div>
+
+    <div id="hop-trace" style="display:none;" class="form-section">
+        <h3>Path Trace</h3>
+        <table>
+            <thead><tr><th>Switch</th><th>IP</th><th>Port</th><th>Detail</th></tr></thead>
+            <tbody id="hop-body"></tbody>
+        </table>
+    </div>
+
+    <details id="config-section" class="form-section">
+        <summary><h3 style="display:inline;cursor:pointer;">Running Config</h3></summary>
+        <pre><code id="r-config"></code></pre>
+    </details>
+
+    <div class="form-section" id="vlan-push-section">
+        <h3>Assign VLAN</h3>
+        <div id="policy-info" style="display:none;margin-bottom:0.75rem;">
+            <small id="policy-text" style="color:var(--pico-muted-color);"></small>
+        </div>
+        <div class="grid">
+            <label>
+                Target VLAN
+                <select id="push-vlan">
+                    <option value="">-- Select VLAN --</option>
+                </select>
+            </label>
+            <label style="align-self:end;">
+                <div class="checkbox-row">
+                    <label>
+                        <input type="checkbox" id="push-save">
+                        Save config
+                    </label>
+                </div>
+            </label>
+        </div>
+        <button type="button" id="btn-push" class="outline">Assign VLAN</button>
+        <div id="push-result"></div>
+    </div>
+</div>
+
+<script>
+const venueSelect = document.getElementById('venue-select');
+const searchInput = document.getElementById('search-term');
+const btnLookup = document.getElementById('btn-lookup');
+const resultDiv = document.getElementById('lookup-result');
+
+function checkReady() {
+    btnLookup.disabled = !(venueSelect.value && searchInput.value.trim());
+}
+venueSelect.addEventListener('change', checkReady);
+searchInput.addEventListener('input', checkReady);
+
+// Store last lookup result for VLAN push
+let lastResult = null;
+
+btnLookup.addEventListener('click', function() {
+    btnLookup.classList.add('loading');
+    btnLookup.disabled = true;
+    resultDiv.style.display = 'none';
+
+    fetch('/api/lookup', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            venue_id: parseInt(venueSelect.value),
+            search_term: searchInput.value.trim(),
+        }),
+    })
+    .then(r => {
+        if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); });
+        return r.json();
+    })
+    .then(data => {
+        lastResult = data;
+        renderResult(data);
+        resultDiv.style.display = '';
+    })
+    .catch(err => {
+        resultDiv.style.display = '';
+        resultDiv.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+    })
+    .finally(() => {
+        btnLookup.classList.remove('loading');
+        checkReady();
+    });
+});
+
+function renderResult(d) {
+    // Warnings
+    const warnDiv = document.getElementById('lookup-warnings');
+    if (d.warnings && d.warnings.length) {
+        warnDiv.innerHTML = d.warnings.map(w =>
+            '<article><p style="color:var(--pico-del-color);">' + escapeHtml(w) + '</p></article>'
+        ).join('');
+    } else {
+        warnDiv.innerHTML = '';
+    }
+
+    // Summary
+    document.getElementById('r-mac').textContent = d.mac_address || '-';
+    document.getElementById('r-ip').textContent = d.ip_address || '-';
+    document.getElementById('r-switch').textContent =
+        d.switch_hostname ? (d.switch_hostname + ' (' + d.switch_ip + ')') : '-';
+    document.getElementById('r-intf').textContent = d.interface || '-';
+    document.getElementById('r-vlan').textContent = d.vlan || '-';
+    document.getElementById('r-platform').textContent = d.platform || '-';
+
+    // Stats
+    const s = d.interface_stats || {};
+    const statusEl = document.getElementById('r-status');
+    const status = s.status || '-';
+    statusEl.textContent = status;
+    statusEl.style.color = status === 'up' ? 'var(--pico-ins-color)' :
+                           status.includes('down') ? 'var(--pico-del-color)' : '';
+
+    document.getElementById('r-desc').textContent = s.description || '-';
+    document.getElementById('r-in-30').textContent = s.input_rate_30sec || '-';
+    document.getElementById('r-out-30').textContent = s.output_rate_30sec || '-';
+    document.getElementById('r-in-5').textContent = s.input_rate_5min || '-';
+    document.getElementById('r-out-5').textContent = s.output_rate_5min || '-';
+    document.getElementById('r-in-err').textContent = s.input_errors != null ? s.input_errors : '-';
+    document.getElementById('r-out-err').textContent = s.output_errors != null ? s.output_errors : '-';
+    document.getElementById('r-crc').textContent = s.crc_errors != null ? s.crc_errors : '-';
+    document.getElementById('r-in-pkt').textContent = s.input_packets != null ? s.input_packets.toLocaleString() : '-';
+    document.getElementById('r-out-pkt').textContent = s.output_packets != null ? s.output_packets.toLocaleString() : '-';
+
+    // OUI Match
+    const ouiSection = document.getElementById('oui-match-section');
+    if (d.oui_match) {
+        ouiSection.style.display = '';
+        let text = '<strong>' + escapeHtml(d.oui_match.oui_prefix) + '</strong>';
+        if (d.oui_match.manufacturer) text += ' &mdash; ' + escapeHtml(d.oui_match.manufacturer);
+        if (d.oui_match.description) text += ' (' + escapeHtml(d.oui_match.description) + ')';
+        if (d.oui_match.candidate_vlans.length) {
+            text += '<br>Recommended VLANs: <strong>' + d.oui_match.candidate_vlans.join(', ') + '</strong>';
+            // Check if current VLAN is in the recommended list
+            if (d.vlan && !d.oui_match.candidate_vlans.includes(d.vlan)) {
+                text += ' <span style="color:var(--pico-del-color);">&mdash; current VLAN ' + escapeHtml(d.vlan) + ' is not in the recommended list</span>';
+            }
+        }
+        document.getElementById('oui-match-text').innerHTML = text;
+    } else {
+        ouiSection.style.display = 'none';
+    }
+
+    // Hop trace
+    const hopDiv = document.getElementById('hop-trace');
+    const hopBody = document.getElementById('hop-body');
+    if (d.hops && d.hops.length) {
+        hopDiv.style.display = '';
+        hopBody.innerHTML = d.hops.map(h =>
+            '<tr><td>' + escapeHtml(h.switch_hostname) + '</td>' +
+            '<td>' + escapeHtml(h.switch_ip) + '</td>' +
+            '<td>' + escapeHtml(h.port) + '</td>' +
+            '<td>' + escapeHtml(h.reason) + '</td></tr>'
+        ).join('');
+    } else {
+        hopDiv.style.display = 'none';
+    }
+
+    // Running config
+    const configEl = document.getElementById('r-config');
+    if (d.interface_config) {
+        configEl.textContent = d.interface_config;
+        document.getElementById('config-section').style.display = '';
+    } else {
+        document.getElementById('config-section').style.display = 'none';
+    }
+
+    // VLAN dropdown — populate from OUI match candidate VLANs, or all venue VLANs
+    const pushSelect = document.getElementById('push-vlan');
+    pushSelect.innerHTML = '<option value="">-- Select VLAN --</option>';
+    const vlans = (d.oui_match && d.oui_match.candidate_vlans.length)
+        ? d.oui_match.candidate_vlans
+        : d.venue_vlans;
+    vlans.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = 'VLAN ' + v;
+        // Pre-select if this matches a recommended VLAN (first one)
+        if (d.oui_match && d.oui_match.candidate_vlans.length && v === d.oui_match.candidate_vlans[0]) {
+            opt.selected = true;
+        }
+        pushSelect.appendChild(opt);
+    });
+
+    // Show port policy info when VLAN changes
+    updatePolicyInfo(d);
+    pushSelect.addEventListener('change', function() { updatePolicyInfo(d); });
+
+    document.getElementById('push-result').innerHTML = '';
+
+    // Show/hide VLAN push section
+    document.getElementById('vlan-push-section').style.display =
+        (d.switch_ip && d.interface && vlans.length) ? '' : 'none';
+}
+
+function updatePolicyInfo(d) {
+    const vlan = document.getElementById('push-vlan').value;
+    const policyDiv = document.getElementById('policy-info');
+    const policyText = document.getElementById('policy-text');
+
+    if (!vlan || !d.port_policies || !d.port_policies.length) {
+        policyDiv.style.display = 'none';
+        return;
+    }
+
+    const policy = d.port_policies.find(p => p.vlan === vlan);
+    if (policy) {
+        policyDiv.style.display = '';
+        let parts = [];
+        if (policy.portfast) parts.push('Portfast');
+        if (policy.bpdu_guard) parts.push('BPDU Guard');
+        if (policy.storm_control) parts.push('Storm Control (' + (policy.storm_control_level || '1.00') + '%)');
+        if (policy.description_template) parts.push('Description: "' + policy.description_template + '"');
+        policyText.innerHTML = 'Port policy for VLAN ' + vlan + ': <strong>' +
+            (parts.length ? parts.join(', ') : 'no specific config') + '</strong>' +
+            (policy.notes ? '<br>' + escapeHtml(policy.notes) : '');
+    } else {
+        policyDiv.style.display = '';
+        policyText.innerHTML = 'No port policy defined for VLAN ' + vlan;
+    }
+}
+
+// VLAN Push
+document.getElementById('btn-push').addEventListener('click', function() {
+    if (!lastResult || !lastResult.switch_ip) return;
+
+    const vlan = document.getElementById('push-vlan').value;
+    if (!vlan) return;
+
+    if (!confirm('Assign VLAN ' + vlan + ' to ' + lastResult.interface + ' on ' + lastResult.switch_hostname + '?')) {
+        return;
+    }
+
+    const btn = this;
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    fetch('/api/lookup/vlan-push', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            venue_id: parseInt(venueSelect.value),
+            switch_ip: lastResult.switch_ip,
+            interface: lastResult.interface,
+            vlan: vlan,
+            platform: lastResult.platform,
+            save_config: document.getElementById('push-save').checked,
+        }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        const el = document.getElementById('push-result');
+        if (data.status === 'ok') {
+            el.innerHTML = '<article><p style="color:var(--pico-ins-color);">' +
+                escapeHtml(data.message) + '</p>' +
+                '<pre><code>' + escapeHtml(data.commands.join('\n')) + '</code></pre></article>';
+        } else {
+            el.innerHTML = '<article><p style="color:var(--pico-del-color);">' +
+                escapeHtml(data.message) + '</p></article>';
+        }
+    })
+    .catch(err => {
+        btn.classList.remove('loading');
+        btn.disabled = false;
+        document.getElementById('push-result').innerHTML =
+            '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+    });
+});
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+</script>
+{% endblock %}

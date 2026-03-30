@@ -1,6 +1,6 @@
 """Aruba AOS-CX platform implementation."""
 import re
-from ..models import MacEntry, Neighbor
+from ..models import MacEntry, Neighbor, VlanInfo
 from ..mac_utils import normalize_mac_to_cisco
 from . import SwitchPlatform
 
@@ -44,6 +44,239 @@ class ArubaAOSCXPlatform(SwitchPlatform):
             "spanning-tree bpdu-guard",
             "spanning-tree port-type admin-edge",
         ]
+
+    def get_interface_config_command(self, interface: str) -> str:
+        return f"show running-config interface {interface}"
+
+    def get_interface_stats_command(self, interface: str) -> str:
+        return f"show interface {interface}"
+
+    def parse_interface_stats(self, raw_output: str) -> dict:
+        """
+        Parse AOS-CX 'show interface X' output.
+
+        AOS-CX format differs from Cisco:
+          Interface 1/1/1 is up
+           Admin state is up
+           Description : AP-01
+           ...
+           RX
+              123456 input packets ...
+              0 input errors ...
+           TX
+              654321 output packets ...
+              0 output errors ...
+        """
+        stats: dict = {}
+
+        # "Interface 1/1/1 is up" or "Interface 1/1/1 is down"
+        status_match = re.search(
+            r'Interface\s+\S+\s+is\s+(up|down)', raw_output
+        )
+        if status_match:
+            stats["status"] = status_match.group(1)
+
+        # "Admin state is up"
+        admin_match = re.search(
+            r'Admin state is\s+(up|down)', raw_output
+        )
+        if admin_match:
+            admin = admin_match.group(1)
+            if admin == "down":
+                stats["status"] = "administratively down"
+            stats["protocol_status"] = stats.get("status", "down")
+
+        # Description
+        desc_match = re.search(r'Description\s*:\s*(.+)', raw_output)
+        if desc_match:
+            stats["description"] = desc_match.group(1).strip()
+
+        # Input/output rates — AOS-CX shows "X bps" or "X Kbps" or "X Mbps"
+        in_rate = re.search(
+            r'(?:RX|Input).*?(\d+[\d.]*)\s*(bps|[KMG]bps)', raw_output, re.DOTALL
+        )
+        if in_rate:
+            stats["input_rate_30sec"] = f"{in_rate.group(1)} {in_rate.group(2)}"
+
+        out_rate = re.search(
+            r'(?:TX|Output).*?(\d+[\d.]*)\s*(bps|[KMG]bps)', raw_output, re.DOTALL
+        )
+        if out_rate:
+            stats["output_rate_30sec"] = f"{out_rate.group(1)} {out_rate.group(2)}"
+
+        # Packet counters
+        in_packets = re.search(r'(\d+)\s+input packets', raw_output)
+        if in_packets:
+            stats["input_packets"] = int(in_packets.group(1))
+
+        out_packets = re.search(r'(\d+)\s+output packets', raw_output)
+        if out_packets:
+            stats["output_packets"] = int(out_packets.group(1))
+
+        # Error counters
+        in_errors = re.search(r'(\d+)\s+input errors', raw_output)
+        if in_errors:
+            stats["input_errors"] = int(in_errors.group(1))
+
+        out_errors = re.search(r'(\d+)\s+output errors', raw_output)
+        if out_errors:
+            stats["output_errors"] = int(out_errors.group(1))
+
+        crc = re.search(r'(\d+)\s+(?:CRC|crc)', raw_output)
+        if crc:
+            stats["crc_errors"] = int(crc.group(1))
+
+        return stats
+
+    # ── VLAN discovery ──────────────────────────────────────────────
+
+    def get_vlan_brief_command(self) -> str:
+        return "show vlan"
+
+    def get_svi_config_command(self) -> str:
+        return "show running-config"
+
+    def get_spanning_tree_vlan_command(self) -> str:
+        return "show spanning-tree"
+
+    def parse_vlan_brief(self, raw_output: str, hostname: str = "", ip: str = "") -> list[VlanInfo]:
+        """
+        Parse AOS-CX 'show vlan' output.
+
+        Format:
+          VLAN  Name                              Status  Reason          Type     Interfaces
+          ----- --------------------------------- ------- --------------- -------- ----------
+          1     default                           up      no_member_port  default
+          21    DATA                              up      ok              static   1/1/1-1/1/48
+        """
+        entries = []
+        skip_vlans = {1}
+        pattern = re.compile(
+            r'^(\d+)\s+(\S+)\s+(up|down)',
+            re.MULTILINE
+        )
+        for match in pattern.finditer(raw_output):
+            vlan_id = int(match.group(1))
+            if vlan_id in skip_vlans:
+                continue
+            entries.append(VlanInfo(
+                vlan_id=vlan_id,
+                name=match.group(2),
+                status=match.group(3),
+                switch_hostname=hostname,
+                switch_ip=ip,
+            ))
+        return entries
+
+    def parse_svi_config(self, raw_output: str, vlan_map: dict[int, VlanInfo]) -> dict[int, VlanInfo]:
+        """
+        Parse AOS-CX 'show running-config' output for interface vlan blocks.
+
+        Extracts: vsx-sync active-gateways, ip address, active-gateway ip mac,
+        active-gateway ip, ip helper-address, ip igmp enable, ip pim-sparse enable
+        """
+        # Split on "interface vlanN" headers
+        blocks = re.split(r'(?=^interface vlan\d+)', raw_output, flags=re.MULTILINE)
+        for block in blocks:
+            header = re.match(r'interface vlan(\d+)', block)
+            if not header:
+                continue
+            vlan_id = int(header.group(1))
+            if vlan_id not in vlan_map:
+                continue
+
+            info = vlan_map[vlan_id]
+            info.has_svi = True
+
+            # "ip address 10.1.21.1/24"
+            ip_match = re.search(r'ip address (\d+\.\d+\.\d+\.\d+/\d+)', block)
+            if ip_match:
+                info.svi_ip_address = ip_match.group(1)
+
+            # "vsx-sync active-gateways"
+            if re.search(r'vsx-sync active-gateways', block):
+                info.vsx_sync = True
+
+            # "active-gateway ip mac aa:bb:cc:dd:ee:ff"
+            gw_mac = re.search(r'active-gateway ip mac\s+(\S+)', block)
+            if gw_mac:
+                info.active_gateway_mac = gw_mac.group(1)
+
+            # "active-gateway ip 10.1.21.254"
+            gw_ip = re.search(r'active-gateway ip\s+(\d+\.\d+\.\d+\.\d+)', block)
+            if gw_ip:
+                info.active_gateway_ip = gw_ip.group(1)
+
+            # DHCP helpers
+            for helper in re.finditer(r'ip helper-address (\d+\.\d+\.\d+\.\d+)', block):
+                info.dhcp_helpers.append(helper.group(1))
+
+            # Shutdown check
+            if re.search(r'^\s+shutdown\s*$', block, re.MULTILINE):
+                info.svi_status = "shutdown"
+            else:
+                info.svi_status = "up"
+
+            # IGMP
+            if re.search(r'ip igmp enable', block):
+                info.igmp_enabled = True
+
+            # PIM sparse
+            if re.search(r'ip pim-sparse enable', block):
+                info.pim_sparse_enabled = True
+
+        return vlan_map
+
+    def parse_spanning_tree_vlans(self, raw_output: str) -> set[int]:
+        """
+        Parse AOS-CX 'show spanning-tree' output for VLAN IDs.
+        Looks for lines like "VLAN 21" or "Spanning tree status.*VLAN 21".
+        """
+        vlans = set()
+        for match in re.finditer(r'VLAN\s+(\d+)', raw_output):
+            vlans.add(int(match.group(1)))
+        return vlans
+
+    # ── VLAN provisioning ───────────────────────────────────────────
+
+    def get_vlan_create_commands(self, vlan_id: int, name: str = "") -> list[str]:
+        cmds = [f"vlan {vlan_id}"]
+        if name:
+            cmds.append(f" name {name}")
+        return cmds
+
+    def get_svi_create_commands(
+        self,
+        vlan_id: int,
+        ip_address: str = "",
+        gateway_ip: str = "",
+        gateway_mac: str = "",
+        dhcp_servers: list[str] | None = None,
+        igmp: bool = False,
+        pim_sparse: bool = False,
+    ) -> list[str]:
+        """Build AOS-CX SVI config commands. ip_address is CIDR (e.g. 10.1.21.1/24)."""
+        cmds = [f"interface vlan{vlan_id}"]
+        if gateway_mac:
+            cmds.append(" vsx-sync active-gateways")
+        if ip_address:
+            cmds.append(f" ip address {ip_address}")
+        if gateway_mac:
+            cmds.append(f" active-gateway ip mac {gateway_mac}")
+        if gateway_ip:
+            cmds.append(f" active-gateway ip {gateway_ip}")
+        if dhcp_servers:
+            for server in dhcp_servers:
+                cmds.append(f" ip helper-address {server}")
+        if igmp:
+            cmds.append(" ip igmp enable")
+        if pim_sparse:
+            cmds.append(" ip pim-sparse enable")
+        cmds.append(" no shutdown")
+        return cmds
+
+    def get_spanning_tree_vlan_commands(self, vlan_id: int) -> list[str]:
+        return [f"spanning-tree vlan {vlan_id}"]
 
     def parse_mac_table(self, raw_output: str) -> list[MacEntry]:
         """

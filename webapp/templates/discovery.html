@@ -4,81 +4,115 @@
 {% block content %}
 <h1>OUI Discovery</h1>
 
-<form id="discovery-form">
-    <div class="form-section">
-        <h3>Connection</h3>
-        <div class="grid">
-            <label class="required">
-                Core Switch IP
-                <input type="text" name="core_ip" placeholder="10.1.1.1" required>
-            </label>
-            <label>
-                Platform
-                <select name="platform">
-                    <option value="auto" selected>Auto-detect</option>
-                    <option value="cisco_ios">Cisco IOS / IOS-XE</option>
-                    <option value="cisco_nxos">Cisco NX-OS</option>
-                    <option value="aruba_aoscx">Aruba AOS-CX</option>
-                </select>
-                <small class="field-help">Leave on Auto unless you know the fabric type</small>
-            </label>
-        </div>
-        <div class="grid">
-            <label class="required">
-                SSH Username
-                <input type="text" name="username" required autocomplete="username">
-            </label>
-            <label class="required">
-                SSH Password
-                <input type="password" name="password" required autocomplete="current-password">
-            </label>
-        </div>
+{% if venues %}
+<div class="form-section">
+    <h3>Load from Venue</h3>
+    <div class="grid">
         <label>
-            Enable Secret
-            <input type="password" name="enable_secret" autocomplete="off">
-            <small class="field-help">Only needed if switches require enable mode. Defaults to SSH password.</small>
+            Venue
+            <select id="venue-select">
+                <option value="">-- Manual entry --</option>
+                {% for v in venues %}
+                <option value="{{ v.id }}">{{ v.name }} ({{ v.core_ip }})</option>
+                {% endfor %}
+            </select>
+            <small class="field-help">Select a venue to use saved connection settings, credentials, and OUI registry</small>
         </label>
     </div>
+</div>
+{% endif %}
 
-    <div class="form-section">
-        <h3>Discovery</h3>
-        <div class="grid">
-            <label class="required">
-                OUI Prefixes
-                <input type="text" name="oui_list" placeholder="00:0F:44, 90:AC:3F" required>
-                <small class="field-help">Comma-separated MAC prefixes to search for</small>
-            </label>
-            <label>
-                Management Subnet
-                <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24">
-                <small class="field-help">Restrict neighbor recursion to this subnet</small>
-            </label>
-        </div>
-        <div class="grid">
-            <div class="checkbox-row">
-                <label>
-                    <input type="checkbox" name="fan_out" value="true">
-                    Fan-out mode
+<form id="discovery-form" novalidate>
+    <div id="manual-fields">
+        <div class="form-section">
+            <h3>Connection</h3>
+            <div class="grid">
+                <label class="required">
+                    Core Switch IP
+                    <input type="text" name="core_ip" placeholder="10.1.1.1" required>
                 </label>
-                <small class="field-help">Visit all CDP/LLDP neighbors from the core. Required when endpoint VLANs are L3-terminated at edge switches.</small>
+                <label>
+                    Platform
+                    <select name="platform">
+                        <option value="auto" selected>Auto-detect</option>
+                        <option value="cisco_ios">Cisco IOS / IOS-XE</option>
+                        <option value="cisco_nxos">Cisco NX-OS</option>
+                        <option value="aruba_aoscx">Aruba AOS-CX</option>
+                    </select>
+                    <small class="field-help">Leave on Auto unless you know the fabric type</small>
+                </label>
+            </div>
+            <div class="grid">
+                <label class="required">
+                    SSH Username
+                    <input type="text" name="username" required autocomplete="username">
+                </label>
+                <label class="required">
+                    SSH Password
+                    <input type="password" name="password" required autocomplete="current-password">
+                </label>
             </div>
             <label>
-                Track VLANs
-                <input type="text" name="track_vlans" placeholder="21, 22, 23">
-                <small class="field-help">Monitor which of these VLANs are active per switch</small>
+                Enable Secret
+                <input type="password" name="enable_secret" autocomplete="off">
+                <small class="field-help">Only needed if switches require enable mode. Defaults to SSH password.</small>
             </label>
         </div>
-        <div class="grid">
-            <label>
-                Workers
-                <input type="number" name="workers" value="10" min="1" max="50">
-                <small class="field-help">Parallel SSH sessions</small>
-            </label>
-            <label>
-                MAC Threshold
-                <input type="number" name="mac_threshold" value="1" min="1" max="10">
-                <small class="field-help">Max MACs per port before flagging as uplink</small>
-            </label>
+
+        <div class="form-section">
+            <h3>Discovery</h3>
+            <div class="grid">
+                <label class="required">
+                    OUI Prefixes
+                    <input type="text" name="oui_list" placeholder="00:0F:44, 90:AC:3F" required>
+                    <small class="field-help">Comma-separated MAC prefixes to search for</small>
+                </label>
+                <label class="required">
+                    Management Subnet
+                    <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24" required>
+                    <small class="field-help">Restrict neighbor recursion to this subnet. Without this, the crawler will attempt SSH into every LLDP neighbor and hang.</small>
+                </label>
+            </div>
+        </div>
+
+        <details class="form-section">
+            <summary><h3 style="display:inline;cursor:pointer;">Options</h3></summary>
+            <div class="grid" style="margin-top:0.75rem;">
+                <div class="checkbox-row">
+                    <label>
+                        <input type="checkbox" name="fan_out" value="true">
+                        Fan-out mode
+                    </label>
+                    <small class="field-help">Visit all CDP/LLDP neighbors from the core</small>
+                </div>
+                <label>
+                    Track VLANs
+                    <input type="text" name="track_vlans" placeholder="21, 22, 23">
+                    <small class="field-help">Monitor which of these VLANs are active per switch</small>
+                </label>
+            </div>
+            <details style="margin-top:0.75rem;">
+                <summary style="font-size:0.85rem;cursor:pointer;color:var(--pico-muted-color);">Advanced</summary>
+                <div class="grid" style="margin-top:0.5rem;">
+                    <label>
+                        Workers
+                        <input type="number" name="workers" value="10" min="1" max="50">
+                        <small class="field-help">Parallel SSH sessions</small>
+                    </label>
+                    <label>
+                        MAC Threshold
+                        <input type="number" name="mac_threshold" value="1" min="1" max="10">
+                        <small class="field-help">Max MACs per port before flagging as uplink</small>
+                    </label>
+                </div>
+            </details>
+        </details>
+    </div>
+
+    <div id="venue-summary" style="display:none;">
+        <div class="form-section">
+            <h3>Venue Configuration</h3>
+            <p id="venue-summary-text" style="margin-bottom:0;"></p>
         </div>
     </div>
 
@@ -88,22 +122,70 @@
 <div id="result"></div>
 
 <script>
-// Enable submit only when required fields are filled
 const form = document.getElementById('discovery-form');
 const btn = document.getElementById('btn-submit');
 const required = form.querySelectorAll('[required]');
+const manualFields = document.getElementById('manual-fields');
 
 function checkReady() {
-    const ready = Array.from(required).every(f => f.value.trim() !== '');
+    const ready = Array.from(required).every(f => {
+        if (f.closest('#manual-fields') && manualFields.style.display === 'none') return true;
+        return f.value.trim() !== '';
+    });
     btn.disabled = !ready;
 }
 required.forEach(f => f.addEventListener('input', checkReady));
 checkReady();
 
+// Venue pre-fill
+const venueSelect = document.getElementById('venue-select');
+const venueSummary = document.getElementById('venue-summary');
+const venueSummaryText = document.getElementById('venue-summary-text');
+let selectedVenueId = null;
+
+if (venueSelect) {
+    venueSelect.addEventListener('change', function() {
+        selectedVenueId = this.value || null;
+        if (selectedVenueId) {
+            fetch('/api/venues/' + selectedVenueId + '/prefill')
+                .then(r => r.json())
+                .then(v => {
+                    manualFields.style.display = 'none';
+                    venueSummary.style.display = '';
+                    let summary = '<strong>' + venueSelect.selectedOptions[0].text + '</strong><br>';
+                    summary += 'Platform: ' + v.platform;
+                    summary += ' &middot; Subnet: ' + (v.mgmt_subnet || '(none)');
+                    summary += ' &middot; OUIs: ' + (v.oui_list.length ? v.oui_list.join(', ') : '(none)');
+                    if (v.fan_out) summary += ' &middot; Fan-out';
+                    if (v.track_vlans.length) summary += ' &middot; Track VLANs: ' + v.track_vlans.join(', ');
+                    venueSummaryText.innerHTML = summary;
+                    btn.disabled = false;
+                });
+        } else {
+            manualFields.style.display = '';
+            venueSummary.style.display = 'none';
+            checkReady();
+        }
+    });
+}
+
 form.addEventListener('submit', function(evt) {
     evt.preventDefault();
     btn.classList.add('loading');
     btn.disabled = true;
+
+    if (selectedVenueId) {
+        fetch('/api/venues/' + selectedVenueId + '/discover', {method: 'POST'})
+            .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); }); return r.json(); })
+            .then(data => { window.location.href = '/jobs/' + data.id; })
+            .catch(err => {
+                btn.classList.remove('loading');
+                btn.disabled = false;
+                document.getElementById('result').innerHTML =
+                    '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+            });
+        return;
+    }
 
     const fd = new FormData(this);
     const data = {

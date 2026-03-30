@@ -9,7 +9,7 @@ from typing import Optional
 from netmiko import ConnectHandler
 from netmiko.ssh_autodetect import SSHDetect
 
-from ..models import MacEntry, Neighbor
+from ..models import MacEntry, Neighbor, VlanInfo
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +103,67 @@ class SwitchPlatform(ABC):
              "Port-channel2": ["GigabitEthernet1/0/51"]}
         """
         return {}  # Override in subclasses
+
+    def get_interface_config_command(self, interface: str) -> str:
+        """Return CLI command for 'show running-config interface X'."""
+        return ""  # Override in subclasses
+
+    def get_interface_stats_command(self, interface: str) -> str:
+        """Return CLI command for 'show interface X' (detailed stats)."""
+        return ""  # Override in subclasses
+
+    def parse_interface_stats(self, raw_output: str) -> dict:
+        """Parse 'show interface X' output into a structured dict."""
+        return {}  # Override in subclasses
+
+    # ── VLAN discovery ──────────────────────────────────────────────
+
+    def get_vlan_brief_command(self) -> str:
+        """Return CLI command to list VLANs."""
+        return ""
+
+    def get_svi_config_command(self) -> str:
+        """Return CLI command to show SVI running-config sections."""
+        return ""
+
+    def get_spanning_tree_vlan_command(self) -> str:
+        """Return CLI command to show spanning-tree VLAN info."""
+        return ""
+
+    def parse_vlan_brief(self, raw_output: str, hostname: str = "", ip: str = "") -> list[VlanInfo]:
+        """Parse VLAN brief output into VlanInfo objects."""
+        return []
+
+    def parse_svi_config(self, raw_output: str, vlan_map: dict[int, VlanInfo]) -> dict[int, VlanInfo]:
+        """Parse SVI config and enrich the vlan_map with SVI details."""
+        return vlan_map
+
+    def parse_spanning_tree_vlans(self, raw_output: str) -> set[int]:
+        """Parse spanning-tree output and return set of VLAN IDs with STP enabled."""
+        return set()
+
+    # ── VLAN provisioning ───────────────────────────────────────────
+
+    def get_vlan_create_commands(self, vlan_id: int, name: str = "") -> list[str]:
+        """Return config commands to create a VLAN definition."""
+        return []
+
+    def get_svi_create_commands(
+        self,
+        vlan_id: int,
+        ip_address: str = "",
+        gateway_ip: str = "",
+        gateway_mac: str = "",
+        dhcp_servers: list[str] | None = None,
+        igmp: bool = False,
+        pim_sparse: bool = False,
+    ) -> list[str]:
+        """Return config commands to create an SVI for a VLAN."""
+        return []
+
+    def get_spanning_tree_vlan_commands(self, vlan_id: int) -> list[str]:
+        """Return config commands to add a VLAN to spanning-tree."""
+        return []
 
     def get_hostname(self, connection) -> str:
         """Extract the switch hostname from the netmiko prompt."""

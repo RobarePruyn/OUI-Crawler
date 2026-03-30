@@ -1,6 +1,10 @@
 """Job history, status, and diff API routes."""
 
+import csv
+import io
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from dataclasses import asdict
@@ -63,6 +67,64 @@ def job_switches(
 ):
     rows = db.query(SwitchResult).filter(SwitchResult.job_id == job_id).all()
     return rows
+
+
+@router.get("/jobs/{job_id}/results/csv")
+def job_results_csv(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    job = db.query(Job).get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    rows = db.query(DeviceResult).filter(DeviceResult.job_id == job_id).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["switch_hostname", "switch_ip", "interface", "mac_address",
+                      "ip_address", "vlan", "matched_oui", "switch_tracked_vlan", "notes"])
+    for r in rows:
+        writer.writerow([r.switch_hostname, r.switch_ip, r.interface, r.mac_address,
+                         r.ip_address or "", r.vlan or "", r.matched_oui or "",
+                         r.switch_tracked_vlan or "", r.notes or ""])
+
+    buf.seek(0)
+    filename = f"discovery_{job_id[:8]}.csv"
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/jobs/{job_id}/switches/csv")
+def job_switches_csv(
+    job_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    job = db.query(Job).get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    rows = db.query(SwitchResult).filter(SwitchResult.job_id == job_id).all()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["hostname", "mgmt_ip", "platform", "upstream_hostname",
+                      "upstream_ip", "upstream_interface"])
+    for r in rows:
+        writer.writerow([r.hostname, r.mgmt_ip, r.platform or "",
+                         r.upstream_hostname or "", r.upstream_ip or "",
+                         r.upstream_interface or ""])
+
+    buf.seek(0)
+    filename = f"inventory_{job_id[:8]}.csv"
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/jobs/{job_id}/action-log", response_model=list[ActionLogOut])

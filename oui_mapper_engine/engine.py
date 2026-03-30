@@ -20,6 +20,7 @@ from netmiko.exceptions import (
 from .models import (
     DeviceRecord, SwitchRecord, Neighbor, MacEntry,
     ProgressEvent, ActionPlan, ActionResult, DiffResult,
+    VlanInfo,
 )
 from .mac_utils import normalize_oui_prefix, mac_matches_oui, normalize_mac_to_cisco
 from .platforms import (
@@ -56,6 +57,7 @@ class OUIPortMapper:
         mac_threshold: int = 1,
         mgmt_subnet: str = "",
         track_vlans: Optional[list[str]] = None,
+        discover_vlans: bool = False,
         save_config: bool = False,
         verbose: bool = False,
         progress_callback: Optional[Callable[[ProgressEvent], None]] = None,
@@ -114,6 +116,12 @@ class OUIPortMapper:
         self.track_vlans: list[str] = track_vlans or []
         # Map: hostname (lowercase) → set of active tracked VLAN IDs
         self.switch_vlan_map: dict[str, set[str]] = {}
+
+        # VLAN discovery: when True, _inventory_switch collects VLAN
+        # definitions, SVIs, and spanning-tree state from each switch.
+        self.discover_vlans = discover_vlans
+        # Map: hostname → list[VlanInfo]
+        self.discovered_vlans: dict[str, list] = {}
 
         # Logging
         if logger is not None:
@@ -1063,6 +1071,38 @@ class OUIPortMapper:
             self.log.info(
                 f"{indent}  Neighbors: {len(neighbors)}"
             )
+
+            # --- VLAN discovery (when enabled) ---
+            if self.discover_vlans:
+                vlan_cmd = platform.get_vlan_brief_command()
+                if vlan_cmd:
+                    try:
+                        vlan_output = connection.send_command(vlan_cmd)
+                        vlans = platform.parse_vlan_brief(vlan_output, hostname, switch_ip)
+                        vlan_map = {v.vlan_id: v for v in vlans}
+
+                        svi_cmd = platform.get_svi_config_command()
+                        if svi_cmd:
+                            svi_output = connection.send_command(svi_cmd)
+                            platform.parse_svi_config(svi_output, vlan_map)
+
+                        st_cmd = platform.get_spanning_tree_vlan_command()
+                        if st_cmd:
+                            st_output = connection.send_command(st_cmd)
+                            st_vlans = platform.parse_spanning_tree_vlans(st_output)
+                            for vid, info in vlan_map.items():
+                                info.spanning_tree_enabled = vid in st_vlans
+
+                        with self._lock:
+                            self.discovered_vlans[hostname] = list(vlan_map.values())
+
+                        self.log.info(
+                            f"{indent}  VLANs discovered: {len(vlan_map)}"
+                        )
+                    except Exception as exc:
+                        self.log.warning(
+                            f"{indent}  VLAN discovery failed on {hostname}: {exc}"
+                        )
         finally:
             connection.disconnect()
             self.log.debug(f"{indent}  Disconnected from {hostname}")

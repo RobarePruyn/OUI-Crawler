@@ -30,6 +30,9 @@ class CiscoNXOSPlatform(CiscoIOSPlatform):
             "spanning-tree bpduguard enable",
         ]
 
+    def get_svi_config_command(self) -> str:
+        return 'show running-config | section "interface Vlan"'
+
     def parse_mac_table(self, raw_output: str) -> list[MacEntry]:
         """
         Parse NX-OS 'show mac address-table' output.

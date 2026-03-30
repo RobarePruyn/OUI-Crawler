@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% set active_page = "venues" %}
+{% block title %}Venues - OUI Port Mapper{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;">
+    <h1 style="margin-bottom:0;">Venues</h1>
+    <a href="/venues/new" role="button">Add Venue</a>
+</div>
+
+{% if venues %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Core IP</th>
+            <th>Platform</th>
+            <th>OUIs</th>
+            <th>Schedules</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for v in venues %}
+        <tr>
+            <td><a href="/venues/{{ v.id }}">{{ v.name }}</a></td>
+            <td><code>{{ v.core_ip }}</code></td>
+            <td>{{ v.platform }}</td>
+            <td>{{ v.oui_entries | length }}</td>
+            <td>{{ v.schedules | selectattr("enabled") | list | length }} active</td>
+            <td>
+                <a href="/venues/{{ v.id }}">Edit</a>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% else %}
+<p>No venues configured yet. Add one to get started with saved credentials and scheduled runs.</p>
+{% endif %}
+{% endblock %}

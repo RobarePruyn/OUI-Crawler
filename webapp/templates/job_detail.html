@@ -16,11 +16,19 @@
 </div>
 
 {% if job.status == "completed" and job.job_type == "discovery" %}
-<p><a href="/actions/{{ job.id }}" role="button" class="outline">Port Actions</a></p>
+<p>
+    <a href="/actions/{{ job.id }}" role="button" class="outline">Port Actions</a>
+    {% if job.venue_id %}
+    <a href="/compliance/{{ job.id }}" role="button" class="outline secondary">Compliance Report</a>
+    {% endif %}
+</p>
 {% endif %}
 
 {% if devices %}
-<h2>Device Results ({{ devices | length }})</h2>
+<div style="display:flex;align-items:center;gap:1rem;">
+    <h2 style="margin-bottom:0;">Device Results ({{ devices | length }})</h2>
+    <a href="/api/jobs/{{ job.id }}/results/csv" role="button" class="outline secondary" style="padding:0.25rem 0.75rem;width:auto;font-size:0.85rem;">Export CSV</a>
+</div>
 <figure>
 <table>
     <thead>
@@ -50,7 +58,10 @@
 {% endif %}
 
 {% if switches %}
-<h2>Switch Inventory ({{ switches | length }})</h2>
+<div style="display:flex;align-items:center;gap:1rem;">
+    <h2 style="margin-bottom:0;">Switch Inventory ({{ switches | length }})</h2>
+    <a href="/api/jobs/{{ job.id }}/switches/csv" role="button" class="outline secondary" style="padding:0.25rem 0.75rem;width:auto;font-size:0.85rem;">Export CSV</a>
+</div>
 <figure>
 <table>
     <thead>
