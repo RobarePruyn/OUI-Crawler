@@ -1,122 +1,137 @@
 {% extends "base.html" %}
+{% set active_page = "discovery" %}
 {% block title %}Discovery - OUI Port Mapper{% endblock %}
 {% block content %}
 <h1>OUI Discovery</h1>
 
-<form id="discovery-form" hx-post="/api/discovery/start" hx-target="#result" hx-swap="innerHTML"
-      hx-headers='{"Content-Type": "application/json"}' hx-ext="json-enc">
-    <div class="grid">
+<form id="discovery-form">
+    <div class="form-section">
+        <h3>Connection</h3>
+        <div class="grid">
+            <label class="required">
+                Core Switch IP
+                <input type="text" name="core_ip" placeholder="10.1.1.1" required>
+            </label>
+            <label>
+                Platform
+                <select name="platform">
+                    <option value="auto" selected>Auto-detect</option>
+                    <option value="cisco_ios">Cisco IOS / IOS-XE</option>
+                    <option value="cisco_nxos">Cisco NX-OS</option>
+                    <option value="aruba_aoscx">Aruba AOS-CX</option>
+                </select>
+                <small class="field-help">Leave on Auto unless you know the fabric type</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label class="required">
+                SSH Username
+                <input type="text" name="username" required autocomplete="username">
+            </label>
+            <label class="required">
+                SSH Password
+                <input type="password" name="password" required autocomplete="current-password">
+            </label>
+        </div>
         <label>
-            Core Switch IP
-            <input type="text" name="core_ip" placeholder="10.1.1.1" required>
-        </label>
-        <label>
-            Platform
-            <select name="platform">
-                <option value="auto" selected>Auto-detect</option>
-                <option value="cisco_ios">Cisco IOS/IOS-XE</option>
-                <option value="cisco_nxos">Cisco NX-OS</option>
-                <option value="aruba_aoscx">Aruba AOS-CX</option>
-            </select>
-        </label>
-    </div>
-    <div class="grid">
-        <label>
-            SSH Username
-            <input type="text" name="username" required>
-        </label>
-        <label>
-            SSH Password
-            <input type="password" name="password" required>
-        </label>
-        <label>
-            Enable Secret <small>(optional)</small>
-            <input type="password" name="enable_secret">
-        </label>
-    </div>
-    <label>
-        OUI Prefixes <small>(comma-separated, e.g. 00:0F:44,90:AC:3F)</small>
-        <input type="text" name="oui_list" placeholder="00:0F:44,90:AC:3F" required>
-    </label>
-    <div class="grid">
-        <label>
-            <input type="checkbox" name="fan_out" value="true">
-            Fan-out mode <small>(visit all CDP/LLDP neighbors)</small>
-        </label>
-        <label>
-            Workers
-            <input type="number" name="workers" value="10" min="1" max="50">
+            Enable Secret
+            <input type="password" name="enable_secret" autocomplete="off">
+            <small class="field-help">Only needed if switches require enable mode. Defaults to SSH password.</small>
         </label>
     </div>
-    <div class="grid">
-        <label>
-            MAC Threshold
-            <input type="number" name="mac_threshold" value="1" min="1" max="10">
-        </label>
-        <label>
-            Management Subnet <small>(optional, e.g. 10.10.0.0/24)</small>
-            <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24">
-        </label>
-        <label>
-            Track VLANs <small>(optional, e.g. 21,22,23)</small>
-            <input type="text" name="track_vlans" placeholder="21,22,23">
-        </label>
+
+    <div class="form-section">
+        <h3>Discovery</h3>
+        <div class="grid">
+            <label class="required">
+                OUI Prefixes
+                <input type="text" name="oui_list" placeholder="00:0F:44, 90:AC:3F" required>
+                <small class="field-help">Comma-separated MAC prefixes to search for</small>
+            </label>
+            <label>
+                Management Subnet
+                <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24">
+                <small class="field-help">Restrict neighbor recursion to this subnet</small>
+            </label>
+        </div>
+        <div class="grid">
+            <div class="checkbox-row">
+                <label>
+                    <input type="checkbox" name="fan_out" value="true">
+                    Fan-out mode
+                </label>
+                <small class="field-help">Visit all CDP/LLDP neighbors from the core. Required when endpoint VLANs are L3-terminated at edge switches.</small>
+            </div>
+            <label>
+                Track VLANs
+                <input type="text" name="track_vlans" placeholder="21, 22, 23">
+                <small class="field-help">Monitor which of these VLANs are active per switch</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label>
+                Workers
+                <input type="number" name="workers" value="10" min="1" max="50">
+                <small class="field-help">Parallel SSH sessions</small>
+            </label>
+            <label>
+                MAC Threshold
+                <input type="number" name="mac_threshold" value="1" min="1" max="10">
+                <small class="field-help">Max MACs per port before flagging as uplink</small>
+            </label>
+        </div>
     </div>
-    <button type="submit">Start Discovery</button>
+
+    <button type="submit" id="btn-submit" class="btn-primary" disabled>Start Discovery</button>
 </form>
 
 <div id="result"></div>
 
 <script>
-// Transform form data to JSON for the API
-document.getElementById('discovery-form').addEventListener('htmx:configRequest', function(evt) {
-    const form = evt.target;
-    const fd = new FormData(form);
-    const data = {};
-    data.core_ip = fd.get('core_ip');
-    data.platform = fd.get('platform');
-    data.username = fd.get('username');
-    data.password = fd.get('password');
-    data.enable_secret = fd.get('enable_secret') || null;
-    data.oui_list = fd.get('oui_list').split(',').map(s => s.trim()).filter(Boolean);
-    data.fan_out = fd.has('fan_out');
-    data.workers = parseInt(fd.get('workers')) || 10;
-    data.mac_threshold = parseInt(fd.get('mac_threshold')) || 1;
-    data.mgmt_subnet = fd.get('mgmt_subnet') || null;
-    data.track_vlans = fd.get('track_vlans') || null;
-    evt.detail.headers['Content-Type'] = 'application/json';
-    evt.detail.requestConfig.formData = null;
-    // Override HTMX's body with our JSON
-    evt.detail.headers['HX-Request'] = 'true';
-});
+// Enable submit only when required fields are filled
+const form = document.getElementById('discovery-form');
+const btn = document.getElementById('btn-submit');
+const required = form.querySelectorAll('[required]');
 
-// Intercept the submission to send JSON
-document.getElementById('discovery-form').addEventListener('submit', function(evt) {
+function checkReady() {
+    const ready = Array.from(required).every(f => f.value.trim() !== '');
+    btn.disabled = !ready;
+}
+required.forEach(f => f.addEventListener('input', checkReady));
+checkReady();
+
+form.addEventListener('submit', function(evt) {
     evt.preventDefault();
+    btn.classList.add('loading');
+    btn.disabled = true;
+
     const fd = new FormData(this);
     const data = {
-        core_ip: fd.get('core_ip'),
+        core_ip: fd.get('core_ip').trim(),
         platform: fd.get('platform'),
-        username: fd.get('username'),
+        username: fd.get('username').trim(),
         password: fd.get('password'),
         enable_secret: fd.get('enable_secret') || null,
         oui_list: fd.get('oui_list').split(',').map(s => s.trim()).filter(Boolean),
         fan_out: fd.has('fan_out'),
         workers: parseInt(fd.get('workers')) || 10,
         mac_threshold: parseInt(fd.get('mac_threshold')) || 1,
-        mgmt_subnet: fd.get('mgmt_subnet') || null,
-        track_vlans: fd.get('track_vlans') || null,
+        mgmt_subnet: fd.get('mgmt_subnet').trim() || null,
+        track_vlans: fd.get('track_vlans').trim() || null,
     };
+
     fetch('/api/discovery/start', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data),
     })
-    .then(r => r.json())
+    .then(r => { if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
     .then(job => { window.location.href = '/jobs/' + job.id; })
     .catch(err => {
+        btn.classList.remove('loading');
+        checkReady();
         document.getElementById('result').innerHTML =
-            '<article><mark>Error: ' + err.message + '</mark></article>';
+            '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
     });
 });
 </script>

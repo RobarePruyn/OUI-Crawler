@@ -1,76 +1,106 @@
 {% extends "base.html" %}
+{% set active_page = "inventory" %}
 {% block title %}Switch Inventory - OUI Port Mapper{% endblock %}
 {% block content %}
 <h1>Switch Inventory</h1>
 
 <form id="inventory-form">
-    <div class="grid">
+    <div class="form-section">
+        <h3>Connection</h3>
+        <div class="grid">
+            <label class="required">
+                Core Switch IP
+                <input type="text" name="core_ip" placeholder="10.1.1.1" required>
+            </label>
+            <label>
+                Platform
+                <select name="platform">
+                    <option value="auto" selected>Auto-detect</option>
+                    <option value="cisco_ios">Cisco IOS / IOS-XE</option>
+                    <option value="cisco_nxos">Cisco NX-OS</option>
+                    <option value="aruba_aoscx">Aruba AOS-CX</option>
+                </select>
+                <small class="field-help">Leave on Auto unless you know the fabric type</small>
+            </label>
+        </div>
+        <div class="grid">
+            <label class="required">
+                SSH Username
+                <input type="text" name="username" required autocomplete="username">
+            </label>
+            <label class="required">
+                SSH Password
+                <input type="password" name="password" required autocomplete="current-password">
+            </label>
+        </div>
         <label>
-            Core Switch IP
-            <input type="text" name="core_ip" placeholder="10.1.1.1" required>
-        </label>
-        <label>
-            Platform
-            <select name="platform">
-                <option value="auto" selected>Auto-detect</option>
-                <option value="cisco_ios">Cisco IOS/IOS-XE</option>
-                <option value="cisco_nxos">Cisco NX-OS</option>
-                <option value="aruba_aoscx">Aruba AOS-CX</option>
-            </select>
-        </label>
-    </div>
-    <div class="grid">
-        <label>
-            SSH Username
-            <input type="text" name="username" required>
-        </label>
-        <label>
-            SSH Password
-            <input type="password" name="password" required>
-        </label>
-        <label>
-            Enable Secret <small>(optional)</small>
-            <input type="password" name="enable_secret">
-        </label>
-    </div>
-    <div class="grid">
-        <label>
-            Workers
-            <input type="number" name="workers" value="10" min="1" max="50">
-        </label>
-        <label>
-            Management Subnet <small>(optional)</small>
-            <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24">
+            Enable Secret
+            <input type="password" name="enable_secret" autocomplete="off">
+            <small class="field-help">Only needed if switches require enable mode. Defaults to SSH password.</small>
         </label>
     </div>
-    <button type="submit">Start Inventory</button>
+
+    <div class="form-section">
+        <h3>Options</h3>
+        <div class="grid">
+            <label>
+                Workers
+                <input type="number" name="workers" value="10" min="1" max="50">
+                <small class="field-help">Parallel SSH sessions</small>
+            </label>
+            <label>
+                Management Subnet
+                <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24">
+                <small class="field-help">Restrict neighbor recursion to this subnet</small>
+            </label>
+        </div>
+    </div>
+
+    <button type="submit" id="btn-submit" class="btn-primary" disabled>Start Inventory</button>
 </form>
 
 <div id="result"></div>
 
 <script>
-document.getElementById('inventory-form').addEventListener('submit', function(evt) {
+const form = document.getElementById('inventory-form');
+const btn = document.getElementById('btn-submit');
+const required = form.querySelectorAll('[required]');
+
+function checkReady() {
+    const ready = Array.from(required).every(f => f.value.trim() !== '');
+    btn.disabled = !ready;
+}
+required.forEach(f => f.addEventListener('input', checkReady));
+checkReady();
+
+form.addEventListener('submit', function(evt) {
     evt.preventDefault();
+    btn.classList.add('loading');
+    btn.disabled = true;
+
     const fd = new FormData(this);
     const data = {
-        core_ip: fd.get('core_ip'),
+        core_ip: fd.get('core_ip').trim(),
         platform: fd.get('platform'),
-        username: fd.get('username'),
+        username: fd.get('username').trim(),
         password: fd.get('password'),
         enable_secret: fd.get('enable_secret') || null,
         workers: parseInt(fd.get('workers')) || 10,
-        mgmt_subnet: fd.get('mgmt_subnet') || null,
+        mgmt_subnet: fd.get('mgmt_subnet').trim() || null,
     };
+
     fetch('/api/inventory/start', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(data),
     })
-    .then(r => r.json())
+    .then(r => { if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
     .then(job => { window.location.href = '/jobs/' + job.id; })
     .catch(err => {
+        btn.classList.remove('loading');
+        checkReady();
         document.getElementById('result').innerHTML =
-            '<article><mark>Error: ' + err.message + '</mark></article>';
+            '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
     });
 });
 </script>

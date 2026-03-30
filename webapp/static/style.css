@@ -1,9 +1,31 @@
-/* Minimal overrides for OUI Port Mapper */
+/* OUI Port Mapper — UI overrides */
 
-nav .outline {
-    padding: 0.25rem 0.75rem;
-    font-size: 0.85rem;
+/* ── Nav ─────────────────────────────────────────────────────────── */
+
+nav ul li a {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    text-decoration: none;
 }
+
+nav ul li a.active {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+}
+
+nav ul li a.nav-logout {
+    border: 1px solid var(--pico-muted-border-color);
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+    padding: 0.2rem 0.6rem;
+}
+
+nav ul li a.nav-logout:hover {
+    border-color: var(--pico-del-color);
+    color: var(--pico-del-color);
+}
+
+/* ── Footer ──────────────────────────────────────────────────────── */
 
 footer {
     margin-top: 2rem;
@@ -12,11 +34,101 @@ footer {
     text-align: center;
 }
 
+/* ── Form sections ───────────────────────────────────────────────── */
+
+.form-section {
+    margin-bottom: 1.5rem;
+    padding: 1.25rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+    background: var(--pico-card-background-color);
+}
+
+.form-section h3 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--pico-muted-color);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+/* ── Field helpers ───────────────────────────────────────────────── */
+
+.field-help {
+    display: block;
+    margin-top: 0.2rem;
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+}
+
+label.required::after {
+    content: " *";
+    color: var(--pico-del-color);
+    font-weight: 600;
+}
+
+/* ── Checkbox row ────────────────────────────────────────────────── */
+
+.checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+    background: var(--pico-card-background-color);
+    margin-bottom: 0;
+}
+
+.checkbox-row label {
+    margin-bottom: 0;
+    cursor: pointer;
+}
+
+.checkbox-row .field-help {
+    margin-top: 0;
+}
+
+/* ── Submit button ───────────────────────────────────────────────── */
+
+button[type="submit"]:disabled,
+button.btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+button.btn-primary.loading {
+    position: relative;
+    color: transparent;
+}
+
+button.btn-primary.loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: 1.2em;
+    height: 1.2em;
+    border: 2px solid transparent;
+    border-top-color: var(--pico-primary-inverse);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ── Tables ──────────────────────────────────────────────────────── */
+
 table code {
     font-size: 0.85em;
 }
 
-/* Keep action form delay/template fields aligned */
+/* ── Action form ─────────────────────────────────────────────────── */
+
 #delay-label, #template-group {
     transition: opacity 0.2s;
 }

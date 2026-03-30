@@ -9,18 +9,19 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+    {% set active_page = active_page|default("") %}
     <nav class="container-fluid">
         <ul>
             <li><strong>OUI Port Mapper</strong></li>
         </ul>
         {% if user is defined and user %}
         <ul>
-            <li><a href="/">Dashboard</a></li>
-            <li><a href="/discovery">Discovery</a></li>
-            <li><a href="/inventory">Inventory</a></li>
-            <li><a href="/diff">Diff</a></li>
-            <li><a href="/settings">Settings</a></li>
-            <li><a href="/logout" role="button" class="outline secondary">Logout</a></li>
+            <li><a href="/" {% if active_page == "dashboard" %}class="active"{% endif %}>Dashboard</a></li>
+            <li><a href="/discovery" {% if active_page == "discovery" %}class="active"{% endif %}>Discovery</a></li>
+            <li><a href="/inventory" {% if active_page == "inventory" %}class="active"{% endif %}>Inventory</a></li>
+            <li><a href="/diff" {% if active_page == "diff" %}class="active"{% endif %}>Diff</a></li>
+            <li><a href="/settings" {% if active_page == "settings" %}class="active"{% endif %}>Settings</a></li>
+            <li><a href="/logout" class="nav-logout">Logout</a></li>
         </ul>
         {% endif %}
     </nav>
