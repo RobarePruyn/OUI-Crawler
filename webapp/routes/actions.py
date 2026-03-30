@@ -53,11 +53,12 @@ def preview_action(
     )
 
     if req.action in ("shutdown", "no_shutdown", "port_cycle"):
-        plan = mapper.plan_toggle(devices, shutdown=(req.action != "no_shutdown"))
+        action_str = "no shutdown" if req.action == "no_shutdown" else "shutdown"
+        plan = mapper.plan_toggle(devices, action=action_str)
     elif req.action == "vlan_assign":
         plan = mapper.plan_vlan_assign(devices)
     elif req.action == "set_description":
-        plan = mapper.plan_set_descriptions(devices)
+        plan = mapper.plan_set_descriptions(devices, template=req.desc_template)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
 

@@ -3,6 +3,8 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from dataclasses import asdict
+
 from oui_mapper_engine import DeviceRecord, OUIPortMapper
 
 from ..auth import User, get_current_user
@@ -122,44 +124,52 @@ def diff_jobs(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    def _load(job_id: str) -> list[DeviceRecord]:
+    def _load_as_dicts(job_id: str) -> list[dict]:
         rows = db.query(DeviceResult).filter(DeviceResult.job_id == job_id).all()
         if not rows:
             raise HTTPException(status_code=404, detail=f"No results for job {job_id}")
         return [
-            DeviceRecord(
-                switch_hostname=r.switch_hostname or "",
-                switch_ip=r.switch_ip or "",
-                interface=r.interface or "",
-                mac_address=r.mac_address or "",
-                matched_oui=r.matched_oui or "",
-                ip_address=r.ip_address or "",
-                vlan=r.vlan or "",
-                notes=r.notes or "",
-            )
+            {
+                "switch_hostname": r.switch_hostname or "",
+                "switch_ip": r.switch_ip or "",
+                "interface": r.interface or "",
+                "mac_address": r.mac_address or "",
+                "matched_oui": r.matched_oui or "",
+                "ip_address": r.ip_address or "",
+                "vlan": r.vlan or "",
+                "notes": r.notes or "",
+            }
             for r in rows
         ]
 
-    old_devices = _load(req.old_job_id)
-    new_devices = _load(req.new_job_id)
+    old_records = _load_as_dicts(req.old_job_id)
+    new_records = _load_as_dicts(req.new_job_id)
 
-    result = OUIPortMapper.diff_records(old_devices, new_devices)
+    result = OUIPortMapper.diff_records(old_records, new_records)
 
+    def _dict_to_out(d: dict) -> DeviceResultOut:
+        return DeviceResultOut(
+            switch_hostname=d.get("switch_hostname"),
+            switch_ip=d.get("switch_ip"),
+            interface=d.get("interface"),
+            mac_address=d.get("mac_address"),
+            ip_address=d.get("ip_address"),
+            vlan=d.get("vlan"),
+        )
+
+    # result.moved is list[tuple[mac_str, old_dict, new_dict]]
     return DiffReport(
-        added=[DeviceResultOut(
-            switch_hostname=d.switch_hostname, switch_ip=d.switch_ip,
-            interface=d.interface, mac_address=d.mac_address,
-            ip_address=d.ip_address, vlan=d.vlan,
-        ) for d in result.added],
-        removed=[DeviceResultOut(
-            switch_hostname=d.switch_hostname, switch_ip=d.switch_ip,
-            interface=d.interface, mac_address=d.mac_address,
-            ip_address=d.ip_address, vlan=d.vlan,
-        ) for d in result.removed],
+        added=[_dict_to_out(d) for d in result.added],
+        removed=[_dict_to_out(d) for d in result.removed],
         moved=[
-            {"mac": m["mac"], "old_switch": m["old_switch"], "old_port": m["old_port"],
-             "new_switch": m["new_switch"], "new_port": m["new_port"]}
-            for m in result.moved
+            {
+                "mac": mac,
+                "old_switch": old.get("switch_hostname", old.get("switch_ip", "")),
+                "old_port": old.get("interface", ""),
+                "new_switch": new.get("switch_hostname", new.get("switch_ip", "")),
+                "new_port": new.get("interface", ""),
+            }
+            for mac, old, new in result.moved
         ],
         unchanged_count=result.unchanged_count,
         old_count=result.old_count,

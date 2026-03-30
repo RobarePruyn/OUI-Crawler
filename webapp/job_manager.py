@@ -8,7 +8,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timezone
-from ipaddress import IPv4Network
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -74,17 +73,21 @@ class JobManager:
                 progress.devices_found = event.devices_found
                 progress.message = event.message or ""
 
+            # Map webapp param names to engine param names
+            platform = params.get("platform", "auto")
+            forced_platform = None if platform == "auto" else platform
+
             mapper = OUIPortMapper(
                 core_ip=params["core_ip"],
                 username=params["username"],
                 password=params["password"],
-                enable_secret=params.get("enable_secret"),
-                platform=params.get("platform", "auto"),
+                enable_secret=params.get("enable_secret") or "",
+                forced_platform=forced_platform,
                 oui_list=params.get("oui_list", []),
                 fan_out=params.get("fan_out", False),
-                workers=params.get("workers", 10),
+                max_workers=params.get("workers", 10),
                 mac_threshold=params.get("mac_threshold", 1),
-                mgmt_subnet=IPv4Network(params["mgmt_subnet"]) if params.get("mgmt_subnet") else None,
+                mgmt_subnet=params.get("mgmt_subnet") or "",
                 track_vlans=params.get("track_vlans"),
                 progress_callback=on_progress,
             )
@@ -105,7 +108,7 @@ class JobManager:
                     matched_oui=dev.matched_oui,
                     ip_address=dev.ip_address,
                     vlan=dev.vlan,
-                    switch_tracked_vlan=getattr(dev, "switch_tracked_vlan", None),
+                    switch_tracked_vlan=dev.switch_tracked_vlan,
                     notes=dev.notes,
                 ))
 
@@ -136,15 +139,18 @@ class JobManager:
                 progress.switches_visited = event.switches_visited
                 progress.message = event.message or ""
 
+            platform = params.get("platform", "auto")
+            forced_platform = None if platform == "auto" else platform
+
             mapper = OUIPortMapper(
                 core_ip=params["core_ip"],
                 username=params["username"],
                 password=params["password"],
-                enable_secret=params.get("enable_secret"),
-                platform=params.get("platform", "auto"),
+                enable_secret=params.get("enable_secret") or "",
+                forced_platform=forced_platform,
                 oui_list=[],
-                workers=params.get("workers", 10),
-                mgmt_subnet=IPv4Network(params["mgmt_subnet"]) if params.get("mgmt_subnet") else None,
+                max_workers=params.get("workers", 10),
+                mgmt_subnet=params.get("mgmt_subnet") or "",
                 progress_callback=on_progress,
             )
 
@@ -156,12 +162,12 @@ class JobManager:
             for sw in switches:
                 db.add(SwitchResult(
                     job_id=job_id,
-                    hostname=sw.hostname,
-                    mgmt_ip=sw.mgmt_ip,
+                    hostname=sw.switch_hostname,
+                    mgmt_ip=sw.switch_ip,
                     platform=sw.platform,
-                    upstream_hostname=getattr(sw, "upstream_hostname", None),
-                    upstream_ip=getattr(sw, "upstream_ip", None),
-                    upstream_interface=getattr(sw, "upstream_interface", None),
+                    upstream_hostname=sw.upstream_hostname,
+                    upstream_ip=sw.upstream_ip,
+                    upstream_interface=sw.upstream_interface,
                 ))
 
             self._mark_completed(db, job_id, progress.switches_visited, 0)
@@ -207,12 +213,15 @@ class JobManager:
                 progress.switches_visited = event.switches_visited
                 progress.message = event.message or ""
 
+            save_config = params.get("save_config", False)
+
             mapper = OUIPortMapper(
                 core_ip="0.0.0.0",  # not used for CSV-based actions
                 username=params["username"],
                 password=params["password"],
-                enable_secret=params.get("enable_secret"),
+                enable_secret=params.get("enable_secret") or "",
                 oui_list=[],
+                save_config=save_config,
                 progress_callback=on_progress,
             )
 
@@ -221,41 +230,39 @@ class JobManager:
 
             action = params["action"]
             dry_run = params.get("dry_run", False)
-            save_config = params.get("save_config", False)
 
             if action == "shutdown":
-                plan = mapper.plan_toggle(devices, shutdown=True)
+                plan = mapper.plan_toggle(devices, action="shutdown")
                 if not dry_run:
-                    results = mapper.execute_toggle(plan.actionable, shutdown=True, save_config=save_config)
+                    results = mapper.execute_toggle(plan.actionable, action="shutdown")
                 else:
                     results = []
             elif action == "no_shutdown":
-                plan = mapper.plan_toggle(devices, shutdown=False)
+                plan = mapper.plan_toggle(devices, action="no shutdown")
                 if not dry_run:
-                    results = mapper.execute_toggle(plan.actionable, shutdown=False, save_config=save_config)
+                    results = mapper.execute_toggle(plan.actionable, action="no shutdown")
                 else:
                     results = []
             elif action == "port_cycle":
-                plan = mapper.plan_toggle(devices, shutdown=True)
+                plan = mapper.plan_toggle(devices, action="shutdown")
                 if not dry_run:
                     results = mapper.execute_cycle(
                         plan.actionable,
-                        cycle_delay=params.get("cycle_delay", 5),
-                        save_config=save_config,
+                        delay_seconds=params.get("cycle_delay", 5),
                     )
                 else:
                     results = []
             elif action == "vlan_assign":
                 plan = mapper.plan_vlan_assign(devices)
                 if not dry_run:
-                    results = mapper.execute_vlan_assign(plan.actionable, save_config=save_config)
+                    results = mapper.execute_vlan_assign(plan.actionable)
                 else:
                     results = []
             elif action == "set_description":
-                plan = mapper.plan_set_descriptions(devices)
+                template = params.get("desc_template", "{mac} {ip}")
+                plan = mapper.plan_set_descriptions(devices, template=template)
                 if not dry_run:
-                    template = params.get("desc_template", "{mac} {ip}")
-                    results = mapper.execute_set_descriptions(plan.actionable, template=template, save_config=save_config)
+                    results = mapper.execute_set_descriptions(plan.actionable)
                 else:
                     results = []
             else:
