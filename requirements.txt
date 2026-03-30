@@ -1,0 +1,8 @@
+netmiko
+fastapi
+uvicorn[standard]
+sqlalchemy
+jinja2
+python-multipart
+pydantic-settings
+itsdangerous

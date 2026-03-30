@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}OUI Port Mapper{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>OUI Port Mapper</strong></li>
+        </ul>
+        {% if user is defined and user %}
+        <ul>
+            <li><a href="/">Dashboard</a></li>
+            <li><a href="/discovery">Discovery</a></li>
+            <li><a href="/inventory">Inventory</a></li>
+            <li><a href="/diff">Diff</a></li>
+            <li><a href="/logout" role="button" class="outline secondary">Logout</a></li>
+        </ul>
+        {% endif %}
+    </nav>
+
+    <main class="container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="container">
+        <small>OUI Port Mapper v4.0 &mdash; Mediacast Network Solutions, Inc.</small>
+    </footer>
+</body>
+</html>

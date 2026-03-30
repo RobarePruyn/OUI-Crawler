@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Switch Inventory - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Switch Inventory</h1>
+
+<form id="inventory-form">
+    <div class="grid">
+        <label>
+            Core Switch IP
+            <input type="text" name="core_ip" placeholder="10.1.1.1" required>
+        </label>
+        <label>
+            Platform
+            <select name="platform">
+                <option value="auto" selected>Auto-detect</option>
+                <option value="cisco_ios">Cisco IOS/IOS-XE</option>
+                <option value="cisco_nxos">Cisco NX-OS</option>
+                <option value="aruba_aoscx">Aruba AOS-CX</option>
+            </select>
+        </label>
+    </div>
+    <div class="grid">
+        <label>
+            SSH Username
+            <input type="text" name="username" required>
+        </label>
+        <label>
+            SSH Password
+            <input type="password" name="password" required>
+        </label>
+        <label>
+            Enable Secret <small>(optional)</small>
+            <input type="password" name="enable_secret">
+        </label>
+    </div>
+    <div class="grid">
+        <label>
+            Workers
+            <input type="number" name="workers" value="10" min="1" max="50">
+        </label>
+        <label>
+            Management Subnet <small>(optional)</small>
+            <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24">
+        </label>
+    </div>
+    <button type="submit">Start Inventory</button>
+</form>
+
+<div id="result"></div>
+
+<script>
+document.getElementById('inventory-form').addEventListener('submit', function(evt) {
+    evt.preventDefault();
+    const fd = new FormData(this);
+    const data = {
+        core_ip: fd.get('core_ip'),
+        platform: fd.get('platform'),
+        username: fd.get('username'),
+        password: fd.get('password'),
+        enable_secret: fd.get('enable_secret') || null,
+        workers: parseInt(fd.get('workers')) || 10,
+        mgmt_subnet: fd.get('mgmt_subnet') || null,
+    };
+    fetch('/api/inventory/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(job => { window.location.href = '/jobs/' + job.id; })
+    .catch(err => {
+        document.getElementById('result').innerHTML =
+            '<article><mark>Error: ' + err.message + '</mark></article>';
+    });
+});
+</script>
+{% endblock %}

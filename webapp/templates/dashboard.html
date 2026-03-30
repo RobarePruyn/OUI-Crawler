@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+
+<div class="grid">
+    <article>
+        <header>Discovery</header>
+        <p>Find devices by OUI prefix across the switching fabric.</p>
+        <a href="/discovery" role="button">New Discovery</a>
+    </article>
+    <article>
+        <header>Switch Inventory</header>
+        <p>Crawl CDP/LLDP to list all reachable switches.</p>
+        <a href="/inventory" role="button">New Inventory</a>
+    </article>
+    <article>
+        <header>Compare Runs</header>
+        <p>Diff two discovery runs to see new, missing, and moved devices.</p>
+        <a href="/diff" role="button">Compare</a>
+    </article>
+</div>
+
+<h2>Recent Jobs</h2>
+{% if jobs %}
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Core IP</th>
+            <th>Switches</th>
+            <th>Devices</th>
+            <th>Created</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td>{{ job.job_type }}</td>
+            <td>
+                {% if job.status == "running" %}
+                <span aria-busy="true">Running</span>
+                {% elif job.status == "completed" %}
+                Completed
+                {% elif job.status == "failed" %}
+                <mark>Failed</mark>
+                {% else %}
+                {{ job.status }}
+                {% endif %}
+            </td>
+            <td>{{ job.core_ip or "-" }}</td>
+            <td>{{ job.switches_visited }}</td>
+            <td>{{ job.devices_found }}</td>
+            <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else "-" }}</td>
+            <td>
+                <a href="/jobs/{{ job.id }}">View</a>
+                {% if job.job_type == "discovery" and job.status == "completed" %}
+                | <a href="/actions/{{ job.id }}">Actions</a>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% else %}
+<p>No jobs yet. Start a discovery or inventory above.</p>
+{% endif %}
+{% endblock %}

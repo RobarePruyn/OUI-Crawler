@@ -1,0 +1,22 @@
+/* Minimal overrides for OUI Port Mapper */
+
+nav .outline {
+    padding: 0.25rem 0.75rem;
+    font-size: 0.85rem;
+}
+
+footer {
+    margin-top: 2rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--pico-muted-border-color);
+    text-align: center;
+}
+
+table code {
+    font-size: 0.85em;
+}
+
+/* Keep action form delay/template fields aligned */
+#delay-label, #template-group {
+    transition: opacity 0.2s;
+}

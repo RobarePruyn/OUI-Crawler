@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Compare Runs - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Compare Discovery Runs</h1>
+
+{% if jobs | length < 2 %}
+<p>You need at least two completed discovery jobs to compare. <a href="/discovery">Run a discovery first.</a></p>
+{% else %}
+<form id="diff-form">
+    <div class="grid">
+        <label>
+            Old Run
+            <select name="old_job_id" required>
+                {% for j in jobs %}
+                <option value="{{ j.id }}">{{ j.created_at.strftime('%Y-%m-%d %H:%M') }} &mdash; {{ j.core_ip }} ({{ j.devices_found }} devices)</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>
+            New Run
+            <select name="new_job_id" required>
+                {% for j in jobs %}
+                <option value="{{ j.id }}" {% if loop.first %}selected{% endif %}>{{ j.created_at.strftime('%Y-%m-%d %H:%M') }} &mdash; {{ j.core_ip }} ({{ j.devices_found }} devices)</option>
+                {% endfor %}
+            </select>
+        </label>
+    </div>
+    <button type="submit">Compare</button>
+</form>
+
+<div id="diff-result"></div>
+
+<script>
+document.getElementById('diff-form').addEventListener('submit', function(evt) {
+    evt.preventDefault();
+    const fd = new FormData(this);
+    const data = {
+        old_job_id: fd.get('old_job_id'),
+        new_job_id: fd.get('new_job_id'),
+    };
+    const el = document.getElementById('diff-result');
+    el.innerHTML = '<article aria-busy="true">Comparing...</article>';
+    fetch('/api/history/diff', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(diff => {
+        let html = '<article><header>Diff Report</header>';
+        html += '<p>Old: ' + diff.old_count + ' devices &rarr; New: ' + diff.new_count + ' devices</p>';
+        html += '<p>Unchanged: ' + diff.unchanged_count + '</p>';
+
+        if (diff.added.length) {
+            html += '<h3>New Devices (' + diff.added.length + ')</h3>';
+            html += '<table><thead><tr><th>Switch</th><th>Port</th><th>MAC</th><th>IP</th></tr></thead><tbody>';
+            diff.added.forEach(d => {
+                html += '<tr><td>' + (d.switch_hostname||'') + '</td><td>' + d.interface + '</td><td><code>' + d.mac_address + '</code></td><td>' + (d.ip_address||'-') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        if (diff.removed.length) {
+            html += '<h3>Missing Devices (' + diff.removed.length + ')</h3>';
+            html += '<table><thead><tr><th>Switch</th><th>Port</th><th>MAC</th><th>IP</th></tr></thead><tbody>';
+            diff.removed.forEach(d => {
+                html += '<tr><td>' + (d.switch_hostname||'') + '</td><td>' + d.interface + '</td><td><code>' + d.mac_address + '</code></td><td>' + (d.ip_address||'-') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        if (diff.moved.length) {
+            html += '<h3>Moved Devices (' + diff.moved.length + ')</h3>';
+            html += '<table><thead><tr><th>MAC</th><th>From</th><th>To</th></tr></thead><tbody>';
+            diff.moved.forEach(m => {
+                html += '<tr><td><code>' + m.mac + '</code></td><td>' + m.old_switch + ' ' + m.old_port + '</td><td>' + m.new_switch + ' ' + m.new_port + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        if (!diff.added.length && !diff.removed.length && !diff.moved.length) {
+            html += '<p>No changes detected.</p>';
+        }
+        html += '</article>';
+        el.innerHTML = html;
+    })
+    .catch(err => { el.innerHTML = '<article><mark>Error: ' + err.message + '</mark></article>'; });
+});
+</script>
+{% endif %}
+
+<p><a href="/">&larr; Back to Dashboard</a></p>
+{% endblock %}

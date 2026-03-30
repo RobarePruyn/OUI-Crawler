@@ -1,0 +1,29 @@
+{% if job.status == "running" or job.status == "pending" %}
+<article aria-busy="true">
+    <p>
+        <strong>Status:</strong> {{ job.status | title }}
+        {% if progress %}
+        &mdash; Switches visited: {{ progress.switches_visited }},
+        Devices found: {{ progress.devices_found }}
+        {% endif %}
+    </p>
+    {% if progress and progress.message %}
+    <p><small>{{ progress.message }}</small></p>
+    {% endif %}
+    <form hx-post="/api/jobs/{{ job.id }}/cancel" hx-swap="none">
+        <button type="submit" class="outline secondary" style="width:auto;">Cancel</button>
+    </form>
+</article>
+{% elif job.status == "completed" %}
+<article>
+    <p>Completed &mdash; {{ job.switches_visited }} switches visited, {{ job.devices_found }} devices found.</p>
+</article>
+{% elif job.status == "failed" %}
+<article>
+    <p><mark>Failed</mark> &mdash; {{ job.error_message or "Unknown error" }}</p>
+</article>
+{% elif job.status == "cancelled" %}
+<article>
+    <p>Cancelled</p>
+</article>
+{% endif %}

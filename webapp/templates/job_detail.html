@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block title %}Job {{ job.id[:8] }} - OUI Port Mapper{% endblock %}
+{% block content %}
+<hgroup>
+    <h1>Job: {{ job.job_type | title }}</h1>
+    <p>{{ job.id }}</p>
+</hgroup>
+
+<div id="progress-area"
+     {% if job.status == "running" or job.status == "pending" %}
+     hx-get="/partials/job-progress/{{ job.id }}"
+     hx-trigger="every 2s"
+     hx-swap="innerHTML"
+     {% endif %}>
+    {% include "partials/progress.html" %}
+</div>
+
+{% if job.status == "completed" and job.job_type == "discovery" %}
+<p><a href="/actions/{{ job.id }}" role="button" class="outline">Port Actions</a></p>
+{% endif %}
+
+{% if devices %}
+<h2>Device Results ({{ devices | length }})</h2>
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Switch</th>
+            <th>Interface</th>
+            <th>MAC</th>
+            <th>IP</th>
+            <th>VLAN</th>
+            <th>Notes</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for d in devices %}
+        <tr>
+            <td>{{ d.switch_hostname or d.switch_ip }}</td>
+            <td>{{ d.interface }}</td>
+            <td><code>{{ d.mac_address }}</code></td>
+            <td>{{ d.ip_address or "-" }}</td>
+            <td>{{ d.vlan or "-" }}</td>
+            <td>{{ d.notes or "" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% if switches %}
+<h2>Switch Inventory ({{ switches | length }})</h2>
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Hostname</th>
+            <th>Management IP</th>
+            <th>Platform</th>
+            <th>Upstream</th>
+            <th>Upstream Interface</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for s in switches %}
+        <tr>
+            <td>{{ s.hostname }}</td>
+            <td>{{ s.mgmt_ip }}</td>
+            <td>{{ s.platform }}</td>
+            <td>{{ s.upstream_hostname or "-" }}</td>
+            <td>{{ s.upstream_interface or "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% if action_logs %}
+<h2>Action Log ({{ action_logs | length }})</h2>
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Action</th>
+            <th>Switch</th>
+            <th>Interface</th>
+            <th>Status</th>
+            <th>Detail</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for a in action_logs %}
+        <tr>
+            <td>{{ a.action_type }}</td>
+            <td>{{ a.switch_hostname }}</td>
+            <td>{{ a.interface }}</td>
+            <td>{{ a.status }}</td>
+            <td>{{ a.detail or "" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+
+{% if job.error_message %}
+<article>
+    <header>Error</header>
+    <pre>{{ job.error_message }}</pre>
+</article>
+{% endif %}
+
+<p><a href="/">&larr; Back to Dashboard</a></p>
+{% endblock %}

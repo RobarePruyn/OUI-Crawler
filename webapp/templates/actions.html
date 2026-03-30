@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Actions - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Port Actions</h1>
+<p>Source job: <a href="/jobs/{{ job.id }}">{{ job.id[:8] }}...</a> ({{ job.job_type }}, {{ job.devices_found }} devices)</p>
+
+<form id="action-form">
+    <input type="hidden" name="job_id" value="{{ job.id }}">
+    <div class="grid">
+        <label>
+            SSH Username
+            <input type="text" name="username" required>
+        </label>
+        <label>
+            SSH Password
+            <input type="password" name="password" required>
+        </label>
+        <label>
+            Enable Secret <small>(optional)</small>
+            <input type="password" name="enable_secret">
+        </label>
+    </div>
+    <div class="grid">
+        <label>
+            Action
+            <select name="action" id="action-select">
+                <option value="port_cycle">Port Cycle (shut + wait + no-shut)</option>
+                <option value="shutdown">Shutdown</option>
+                <option value="no_shutdown">No Shutdown (re-enable)</option>
+                <option value="vlan_assign">VLAN Reassignment</option>
+                <option value="set_description">Set Interface Descriptions</option>
+            </select>
+        </label>
+        <label id="delay-label">
+            Cycle Delay (seconds)
+            <input type="number" name="cycle_delay" value="5" min="1" max="60">
+        </label>
+    </div>
+    <div class="grid">
+        <label id="template-group" style="display:none;">
+            Description Template
+            <input type="text" name="desc_template" value="{mac} {ip}" placeholder="{mac} {ip}">
+            <small>Placeholders: {mac}, {ip}, {oui}, {vlan}, {hostname}</small>
+        </label>
+        <label>
+            <input type="checkbox" name="save_config" value="true">
+            Save config (write memory)
+        </label>
+    </div>
+    <div class="grid">
+        <button type="button" id="btn-preview" class="outline">Preview (dry run)</button>
+        <button type="button" id="btn-execute" class="contrast">Execute</button>
+    </div>
+</form>
+
+<div id="preview-result"></div>
+<div id="execute-result"></div>
+
+<script>
+const actionSelect = document.getElementById('action-select');
+const delayLabel = document.getElementById('delay-label');
+const templateGroup = document.getElementById('template-group');
+
+actionSelect.addEventListener('change', function() {
+    delayLabel.style.display = this.value === 'port_cycle' ? '' : 'none';
+    templateGroup.style.display = this.value === 'set_description' ? '' : 'none';
+});
+
+function getFormData() {
+    const fd = new FormData(document.getElementById('action-form'));
+    return {
+        job_id: fd.get('job_id'),
+        username: fd.get('username'),
+        password: fd.get('password'),
+        enable_secret: fd.get('enable_secret') || null,
+        action: fd.get('action'),
+        cycle_delay: parseInt(fd.get('cycle_delay')) || 5,
+        save_config: fd.has('save_config'),
+        desc_template: fd.get('desc_template') || '{mac} {ip}',
+        dry_run: false,
+    };
+}
+
+document.getElementById('btn-preview').addEventListener('click', function() {
+    const data = getFormData();
+    data.dry_run = true;
+    const el = document.getElementById('preview-result');
+    el.innerHTML = '<article aria-busy="true">Computing action plan...</article>';
+    fetch('/api/actions/preview', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(plan => {
+        let html = '<article><header>Action Preview</header>';
+        html += '<p><strong>' + plan.actionable_count + '</strong> ports will be acted on.</p>';
+        if (plan.skipped_notes) html += '<p>Skipped (notes): ' + plan.skipped_notes + '</p>';
+        if (plan.skipped_trunk) html += '<p>Skipped (trunk/LAG): ' + plan.skipped_trunk + '</p>';
+        if (plan.skipped_bad_intf) html += '<p>Skipped (bad interface): ' + plan.skipped_bad_intf + '</p>';
+        if (plan.skipped_correct_vlan) html += '<p>Skipped (correct VLAN): ' + plan.skipped_correct_vlan + '</p>';
+        if (plan.actionable.length > 0) {
+            html += '<table><thead><tr><th>Switch</th><th>Interface</th><th>MAC</th><th>IP</th></tr></thead><tbody>';
+            plan.actionable.forEach(d => {
+                html += '<tr><td>' + (d.switch_hostname || d.switch_ip) + '</td><td>' + d.interface + '</td><td><code>' + d.mac_address + '</code></td><td>' + (d.ip_address || '-') + '</td></tr>';
+            });
+            html += '</tbody></table>';
+        }
+        html += '</article>';
+        el.innerHTML = html;
+    })
+    .catch(err => { el.innerHTML = '<article><mark>Error: ' + err.message + '</mark></article>'; });
+});
+
+document.getElementById('btn-execute').addEventListener('click', function() {
+    if (!confirm('Are you sure you want to execute this action? This will make changes to live switch ports.')) return;
+    const data = getFormData();
+    const el = document.getElementById('execute-result');
+    el.innerHTML = '<article aria-busy="true">Starting action...</article>';
+    fetch('/api/actions/execute', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(job => { window.location.href = '/jobs/' + job.id; })
+    .catch(err => { el.innerHTML = '<article><mark>Error: ' + err.message + '</mark></article>'; });
+});
+</script>
+
+<p><a href="/">&larr; Back to Dashboard</a></p>
+{% endblock %}
