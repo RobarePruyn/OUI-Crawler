@@ -1,5 +1,19 @@
 /* OUI Port Mapper — UI overrides */
 
+/* ── Global scale ────────────────────────────────────────────────── */
+
+:root {
+    --pico-font-size: 87.5%;      /* 14px base instead of 16px */
+}
+
+h1 { font-size: 1.6rem; }
+h2 { font-size: 1.25rem; }
+h3 { font-size: 1rem; }
+
+main.container {
+    max-width: 960px;
+}
+
 /* ── Nav ─────────────────────────────────────────────────────────── */
 
 nav ul li a {
@@ -37,8 +51,8 @@ footer {
 /* ── Form sections ───────────────────────────────────────────────── */
 
 .form-section {
-    margin-bottom: 1.5rem;
-    padding: 1.25rem;
+    margin-bottom: 1rem;
+    padding: 1rem;
     border: 1px solid var(--pico-muted-border-color);
     border-radius: 8px;
     background: var(--pico-card-background-color);
@@ -46,8 +60,8 @@ footer {
 
 .form-section h3 {
     margin-top: 0;
-    margin-bottom: 1rem;
-    font-size: 1rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
     font-weight: 600;
     color: var(--pico-muted-color);
     text-transform: uppercase;
