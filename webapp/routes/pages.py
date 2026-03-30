@@ -7,9 +7,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
-from ..auth import User, authenticate_user, get_current_user
+from ..auth import User, authenticate_user, get_current_user, hash_password, verify_password
 from ..database import get_db
 from ..db_models import DeviceResult, Job, SwitchResult, ActionLog
+from ..db_models import User as UserModel
 
 router = APIRouter(tags=["pages"])
 
@@ -147,3 +148,103 @@ def diff_page(
         .all()
     )
     return _render(request, "diff.html", {"user": user, "jobs": discovery_jobs})
+
+
+# ── Settings ─────────────────────────────────────────────────────────
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "admin" else []
+    return _render(request, "settings.html", {"user": user, "users": users})
+
+
+@router.post("/settings/change-password")
+async def change_password(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    form = await request.form()
+    current = form.get("current_password", "")
+    new_pw = form.get("new_password", "")
+    confirm = form.get("confirm_password", "")
+
+    users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "admin" else []
+    ctx = {"user": user, "users": users}
+
+    if not verify_password(current, user.password_hash):
+        return _render(request, "settings.html", {**ctx, "message": "Current password is incorrect.", "error": True})
+
+    if new_pw != confirm:
+        return _render(request, "settings.html", {**ctx, "message": "New passwords do not match.", "error": True})
+
+    if len(new_pw) < 8:
+        return _render(request, "settings.html", {**ctx, "message": "Password must be at least 8 characters.", "error": True})
+
+    user.password_hash = hash_password(new_pw)
+    db.commit()
+    return _render(request, "settings.html", {**ctx, "message": "Password changed successfully."})
+
+
+@router.post("/settings/create-user")
+async def create_user(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    form = await request.form()
+    username = form.get("username", "").strip()
+    password = form.get("password", "")
+    role = form.get("role", "operator")
+
+    users = db.query(UserModel).order_by(UserModel.username).all()
+    ctx = {"user": user, "users": users}
+
+    if not username:
+        return _render(request, "settings.html", {**ctx, "message": "Username is required.", "error": True})
+
+    if len(password) < 8:
+        return _render(request, "settings.html", {**ctx, "message": "Password must be at least 8 characters.", "error": True})
+
+    if db.query(UserModel).filter(UserModel.username == username).first():
+        return _render(request, "settings.html", {**ctx, "message": f"User '{username}' already exists.", "error": True})
+
+    new_user = UserModel(
+        username=username,
+        password_hash=hash_password(password),
+        role=role,
+    )
+    db.add(new_user)
+    db.commit()
+
+    users = db.query(UserModel).order_by(UserModel.username).all()
+    return _render(request, "settings.html", {"user": user, "users": users, "message": f"User '{username}' created."})
+
+
+@router.post("/settings/delete-user/{user_id}")
+def delete_user(
+    user_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    target = db.query(UserModel).get(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if target.id == user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+
+    db.delete(target)
+    db.commit()
+    return RedirectResponse("/settings", status_code=303)

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Settings - OUI Port Mapper{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<h2>Change Password</h2>
+<form id="password-form" method="post" action="/settings/change-password">
+    <div class="grid">
+        <label>
+            Current Password
+            <input type="password" name="current_password" required>
+        </label>
+        <label>
+            New Password
+            <input type="password" name="new_password" required minlength="8">
+        </label>
+        <label>
+            Confirm New Password
+            <input type="password" name="confirm_password" required minlength="8">
+        </label>
+    </div>
+    <button type="submit">Change Password</button>
+</form>
+
+{% if message %}
+<article>
+    <p {% if error %}style="color: var(--pico-del-color);"{% endif %}>{{ message }}</p>
+</article>
+{% endif %}
+
+{% if user.role == "admin" %}
+<hr>
+<h2>User Management</h2>
+
+<h3>Create User</h3>
+<form method="post" action="/settings/create-user">
+    <div class="grid">
+        <label>
+            Username
+            <input type="text" name="username" required>
+        </label>
+        <label>
+            Password
+            <input type="password" name="password" required minlength="8">
+        </label>
+        <label>
+            Role
+            <select name="role">
+                <option value="admin">Admin</option>
+                <option value="operator" selected>Operator</option>
+            </select>
+        </label>
+    </div>
+    <button type="submit">Create User</button>
+</form>
+
+<h3>Existing Users</h3>
+<figure>
+<table>
+    <thead>
+        <tr>
+            <th>Username</th>
+            <th>Role</th>
+            <th>Created</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for u in users %}
+        <tr>
+            <td>{{ u.username }}{% if u.id == user.id %} <small>(you)</small>{% endif %}</td>
+            <td>{{ u.role }}</td>
+            <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else "-" }}</td>
+            <td>
+                {% if u.id != user.id %}
+                <form method="post" action="/settings/delete-user/{{ u.id }}" style="margin:0;"
+                      onsubmit="return confirm('Delete user {{ u.username }}?');">
+                    <button type="submit" class="outline secondary" style="padding:0.25rem 0.5rem;width:auto;">Delete</button>
+                </form>
+                {% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</figure>
+{% endif %}
+{% endblock %}
