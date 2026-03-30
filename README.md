@@ -19,6 +19,7 @@ Multi-platform network automation tool that locates devices by OUI prefix across
 - **MAC threshold** (`--mac-threshold`) handles dual-NIC devices (e.g., VITEC encoders)
 - **Management subnet filter** (`--mgmt-subnet`) prevents recursion into LLDP-advertising endpoints
 - **Save config** (`--save-config`) persists changes to startup-config
+- **Switch inventory** (`--switch-inventory`) crawls the fabric via CDP/LLDP and lists every reachable switch with hostname, management IP, platform, and upstream link — no OUI list required
 - **CSV export** with MAC deduplication (clean finds prioritized over uplink records)
 
 ## Requirements
@@ -28,6 +29,11 @@ pip install netmiko
 ```
 
 ## Quick Start
+
+### Switch inventory (list all switches in the fabric)
+```bash
+python3 oui_port_mapper_v4.0.py --core 10.1.1.1 --user admin --switch-inventory --output switches.csv
+```
 
 ### Discovery (normal mode)
 ```bash
@@ -89,7 +95,7 @@ All changes are **running-config only** by default — a reload reverts them. Us
 
 | Version | Changes |
 |---------|---------|
-| v4.0 | Concurrent recursion at all depths, `--save-config`, `--vlan-assign` with platform STP hardening, `--mac-threshold`, `--mgmt-subnet` |
+| v4.0 | Concurrent recursion at all depths, `--save-config`, `--vlan-assign` with platform STP hardening, `--mac-threshold`, `--mgmt-subnet`, `--switch-inventory` fabric topology crawl |
 | v3.0 | Fan-out mode, concurrent fan-out threading, hostname dedup, safety filter, port-cycle, VLAN tracking, CSV dedup |
 | v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS parser fixes, recursive discovery |
 | v1.0 | Initial single-hop core-only discovery |

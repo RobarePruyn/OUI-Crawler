@@ -61,6 +61,38 @@ the folder where you put the files:
     cd C:\Users\YourName\oui_mapper              (Windows)
 
 
+### TASK 0: LIST ALL SWITCHES IN THE FABRIC (no OUI needed)
+
+This crawls the switching fabric via CDP/LLDP and outputs a CSV of
+every reachable switch with hostname, management IP, and platform.
+No OUI list needed. Useful for verifying connectivity and getting
+a site inventory before running device discovery.
+
+Mac/Linux:
+
+    python3 oui_port_mapper_v4.0.py \
+      --core CORE_SWITCH_IP \
+      --user SSH_USERNAME \
+      --switch-inventory \
+      --output switches.csv
+
+Windows (one line):
+
+    python oui_port_mapper_v4.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --switch-inventory --output switches.csv
+
+To restrict which neighbors are visited (e.g., only management subnet):
+
+    python3 oui_port_mapper_v4.0.py \
+      --core CORE_SWITCH_IP \
+      --user SSH_USERNAME \
+      --switch-inventory \
+      --mgmt-subnet 10.10.0.0/24 \
+      --output switches.csv
+
+The CSV includes which switch/port each switch was discovered through
+(upstream_hostname, upstream_ip, upstream_interface columns).
+
+
 ### TASK 1: DISCOVER ALL DMP-4310 AND BRIGHTSIGN DEVICES
 
 This finds every matching device on the network and saves the results
@@ -249,6 +281,9 @@ Only clean, single-MAC, access-port finds are acted on.
 All commands below assume you're in the folder with the files.
 Replace CORE_SWITCH_IP and SSH_USERNAME every time.
 On Windows, use `python` instead of `python3`.
+
+    # Switch inventory (list all switches, no OUI needed)
+    python3 oui_port_mapper_v4.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --switch-inventory --output switches.csv
 
     # Discover only (fan-out mode)
     python3 oui_port_mapper_v4.0.py --core CORE_SWITCH_IP --user SSH_USERNAME --oui-file target_ouis.txt --fan-out --workers 10 --output discovery_results.csv

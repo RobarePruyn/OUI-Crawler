@@ -40,6 +40,10 @@ Discovery Modes:
             only), then normal MAC-tracing at depth 1+. Required for
             routed-access designs where endpoint VLANs are L3-terminated
             at the edge and never trunked L2 to core.
+  Switch Inventory:
+            Crawl the fabric via CDP/LLDP and return every reachable
+            switch with hostname, management IP, and platform. No OUI
+            list required. Use --switch-inventory.
 
 Safety Features:
   - Access-port-only filter: shut/no-shut/port-cycle operations reject
@@ -78,10 +82,14 @@ Usage:
   # Reassign ports to their correct tracked VLAN
   python oui_port_mapper.py --from-csv inventory.csv --user admin --vlan-assign --dry-run
 
+  # Switch inventory — crawl fabric and list all switches
+  python oui_port_mapper.py --core 10.1.1.1 --user admin --switch-inventory
+
 Version History:
   v4.0  — Concurrent recursion at all depths (ThreadPoolExecutor),
            --save-config to persist changes to startup-config,
-           platform-correct write-memory commands.
+           platform-correct write-memory commands,
+           --switch-inventory for fabric topology crawl via CDP/LLDP.
   v3.3  — VLAN reassignment (--vlan-assign) moves access ports to the
            tracked VLAN for their switch. Platform-aware commands for
            Cisco IOS/NX-OS and Aruba AOS-CX.
@@ -165,6 +173,18 @@ class MacEntry:
     mac_address: str          # normalized xxxx.xxxx.xxxx
     entry_type: str           # DYNAMIC, STATIC, etc.
     interface: str
+
+
+@dataclass
+class SwitchRecord:
+    """A switch discovered via CDP/LLDP neighbor crawl (--switch-inventory)."""
+    switch_hostname: str
+    switch_ip: str
+    platform: str
+    discovery_depth: int = 0
+    upstream_hostname: str = ""   # switch we reached this one from
+    upstream_ip: str = ""         # management IP of upstream switch
+    upstream_interface: str = ""  # interface on upstream switch facing this one
 
 
 # ---------------------------------------------------------------------------
@@ -1980,6 +2000,262 @@ class OUIPortMapper:
                         self.resolved_macs.add(entry.mac_address)
 
     # ------------------------------------------------------------------
+    # Switch inventory (--switch-inventory)
+    # ------------------------------------------------------------------
+
+    def discover_switches(self) -> list[SwitchRecord]:
+        """
+        Crawl the switching fabric via CDP/LLDP and return a list of
+        every reachable switch. No OUI matching or MAC tracing — just
+        neighbor discovery with the same dedup and guard rails as the
+        normal discovery engine.
+        """
+        self.log.info(
+            f"Starting switch inventory crawl from {self.core_ip}"
+        )
+        self.log.info(f"Max traversal depth: {self.max_depth}")
+        if self.mgmt_subnet:
+            self.log.info(
+                f"Management subnet filter: {self.mgmt_subnet}"
+            )
+
+        self.switch_inventory_records: list[SwitchRecord] = []
+
+        self._inventory_switch(
+            switch_ip=self.core_ip,
+            current_depth=0,
+            trail="core",
+            upstream_hostname="",
+            upstream_ip="",
+            upstream_interface="",
+        )
+
+        self.log.info(
+            f"\nSwitch inventory complete. "
+            f"{len(self.switch_inventory_records)} switch(es) found."
+        )
+
+        # Console summary by platform
+        platform_counts: dict[str, int] = {}
+        for rec in self.switch_inventory_records:
+            platform_counts[rec.platform] = (
+                platform_counts.get(rec.platform, 0) + 1
+            )
+
+        print(f"\n{'='*60}")
+        print(f"  SWITCH INVENTORY — {len(self.switch_inventory_records)} switches")
+        print(f"{'='*60}")
+        for rec in self.switch_inventory_records:
+            depth_prefix = "  " * min(rec.discovery_depth, 5)
+            print(
+                f"  {depth_prefix}{rec.switch_hostname:30s}  "
+                f"{rec.switch_ip:16s}  {rec.platform}"
+            )
+        print(f"{'-'*60}")
+        for plat, count in sorted(platform_counts.items()):
+            print(f"  {plat}: {count}")
+        print(f"{'='*60}\n")
+
+        return self.switch_inventory_records
+
+    def _inventory_switch(
+        self,
+        switch_ip: str,
+        current_depth: int,
+        trail: str,
+        upstream_hostname: str,
+        upstream_ip: str,
+        upstream_interface: str,
+    ):
+        """
+        Recursive per-switch inventory worker. Connects, records the
+        switch, collects CDP/LLDP neighbors, and recurses into all of
+        them. Skips ARP/MAC/OUI — purely topology crawl.
+        """
+        # --- Guard: depth limit ---
+        if current_depth > self.max_depth:
+            self.log.warning(
+                f"Max depth ({self.max_depth}) reached at {switch_ip}. "
+                f"Trail: {trail}. Stopping this branch."
+            )
+            return
+
+        # --- Guard: already visited (IP) ---
+        if switch_ip in self.visited_switches:
+            self.log.debug(
+                f"Already visited {switch_ip}, skipping. Trail: {trail}"
+            )
+            return
+
+        # --- Connect and detect platform ---
+        connection, platform = self._connect(switch_ip)
+        if not connection or not platform:
+            self.log.error(
+                f"Cannot connect to {switch_ip}. Trail: {trail}"
+            )
+            return
+
+        hostname = platform.get_hostname(connection)
+        hostname_key = hostname.lower().strip()
+
+        # --- Guard: hostname-based dedup ---
+        with self._lock:
+            if hostname_key in self.visited_hostnames:
+                self.log.debug(
+                    f"Already visited {hostname} via different IP, "
+                    f"skipping {switch_ip}. Trail: {trail}"
+                )
+                connection.disconnect()
+                return
+            self.visited_hostnames.add(hostname_key)
+            self.visited_switches[switch_ip] = platform.platform_name
+
+        indent = "  " * min(current_depth, 5)
+
+        self.log.info(
+            f"{indent}[depth={current_depth}] {hostname} "
+            f"({switch_ip}) — {platform.platform_name}"
+        )
+
+        # --- Record this switch ---
+        record = SwitchRecord(
+            switch_hostname=hostname,
+            switch_ip=switch_ip,
+            platform=platform.platform_name,
+            discovery_depth=current_depth,
+            upstream_hostname=upstream_hostname,
+            upstream_ip=upstream_ip,
+            upstream_interface=upstream_interface,
+        )
+        with self._lock:
+            self.switch_inventory_records.append(record)
+
+        try:
+            # --- Collect CDP/LLDP neighbors ---
+            neighbors = self._collect_neighbors(connection, platform)
+            self.log.info(
+                f"{indent}  Neighbors: {len(neighbors)}"
+            )
+        finally:
+            connection.disconnect()
+            self.log.debug(f"{indent}  Disconnected from {hostname}")
+
+        # --- Build target list (all neighbors, deduped) ---
+        all_neighbor_ips: dict[str, tuple[str, str]] = {}  # IP → (hostname, local_intf)
+        for nbr in neighbors:
+            if nbr.neighbor_ip and nbr.neighbor_ip not in all_neighbor_ips:
+                all_neighbor_ips[nbr.neighbor_ip] = (
+                    nbr.neighbor_hostname,
+                    nbr.local_interface,
+                )
+
+        targets: list[tuple[str, str, str]] = []  # (IP, hostname, local_intf)
+        for nbr_ip, (nbr_name, local_intf) in all_neighbor_ips.items():
+            nbr_key = nbr_name.lower().strip()
+            with self._lock:
+                already_done = (
+                    nbr_ip in self.visited_switches
+                    or nbr_key in self.visited_hostnames
+                )
+            if already_done:
+                self.log.debug(
+                    f"{indent}    Skipping {nbr_name} ({nbr_ip}) "
+                    f"— already visited"
+                )
+                continue
+            if not self._ip_in_mgmt_subnet(nbr_ip):
+                self.log.debug(
+                    f"{indent}    Skipping {nbr_name} ({nbr_ip}) "
+                    f"— outside management subnet"
+                )
+                continue
+            targets.append((nbr_ip, nbr_name, local_intf))
+
+        if not targets:
+            return
+
+        self.log.info(
+            f"{indent}  Crawling {len(targets)} neighbor(s) "
+            f"({self.max_workers} concurrent workers)"
+        )
+
+        # --- Concurrent dispatch to all neighbors ---
+        def _inventory_worker(nbr_ip: str, nbr_name: str, local_intf: str):
+            new_trail = f"{trail} → {nbr_name}"
+            self.log.info(
+                f"{indent}    → {nbr_name} ({nbr_ip})"
+            )
+            self._inventory_switch(
+                switch_ip=nbr_ip,
+                current_depth=current_depth + 1,
+                trail=new_trail,
+                upstream_hostname=hostname,
+                upstream_ip=switch_ip,
+                upstream_interface=local_intf,
+            )
+
+        with ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            futures = {
+                executor.submit(
+                    _inventory_worker, ip, name, intf
+                ): (ip, name)
+                for ip, name, intf in targets
+            }
+            for future in as_completed(futures):
+                ip, name = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    self.log.error(
+                        f"Inventory worker for {name} ({ip}) "
+                        f"failed: {exc}"
+                    )
+
+    def export_switch_inventory_csv(
+        self,
+        records: Optional[list[SwitchRecord]] = None,
+        filename: Optional[str] = None,
+    ) -> str:
+        """Export switch inventory records to CSV."""
+        records = records or self.switch_inventory_records
+        filename = filename or self.output_file
+
+        fieldnames = [
+            "switch_hostname",
+            "switch_ip",
+            "platform",
+            "discovery_depth",
+            "upstream_hostname",
+            "upstream_ip",
+            "upstream_interface",
+        ]
+
+        # Sort by depth, then hostname for readable output
+        sorted_records = sorted(
+            records,
+            key=lambda r: (r.discovery_depth, r.switch_hostname.lower()),
+        )
+
+        with open(filename, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for rec in sorted_records:
+                writer.writerow({
+                    "switch_hostname": rec.switch_hostname,
+                    "switch_ip": rec.switch_ip,
+                    "platform": rec.platform,
+                    "discovery_depth": rec.discovery_depth,
+                    "upstream_hostname": rec.upstream_hostname,
+                    "upstream_ip": rec.upstream_ip,
+                    "upstream_interface": rec.upstream_interface,
+                })
+
+        print(f"Switch inventory exported to {filename}")
+        return filename
+
+    # ------------------------------------------------------------------
     # CSV export / import
     # ------------------------------------------------------------------
 
@@ -2518,6 +2794,15 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     trav.add_argument(
+        "--switch-inventory", action="store_true",
+        help=(
+            "Crawl the switching fabric via CDP/LLDP and output a list "
+            "of every reachable switch with hostname, management IP, "
+            "and platform. No OUI list required. Respects --max-depth, "
+            "--workers, and --mgmt-subnet."
+        ),
+    )
+    trav.add_argument(
         "--workers", type=int, default=10,
         help=(
             "Number of concurrent SSH sessions for fan-out mode "
@@ -2666,7 +2951,38 @@ def main():
             mapper.toggle_ports(records, action=action)
         return
 
-    # --- Mode 2: Discovery ---
+    # --- Mode 2: Switch inventory (topology crawl only) ---
+    if args.switch_inventory:
+        if not args.core:
+            print("ERROR: --core is required for --switch-inventory")
+            sys.exit(1)
+
+        username = args.user or input("SSH Username: ")
+        password = args.password or getpass.getpass("SSH Password: ")
+        forced_platform = None if args.platform == "auto" else args.platform
+
+        mapper = OUIPortMapper(
+            core_ip=args.core,
+            username=username,
+            password=password,
+            oui_list=[],
+            enable_secret=args.enable_secret or password,
+            forced_platform=forced_platform,
+            output_file=args.output,
+            max_depth=args.max_depth,
+            max_workers=args.workers,
+            mgmt_subnet=args.mgmt_subnet or "",
+            verbose=args.verbose,
+        )
+
+        switches = mapper.discover_switches()
+        if switches:
+            mapper.export_switch_inventory_csv()
+        else:
+            print("No switches discovered. No CSV exported.")
+        return
+
+    # --- Mode 3: OUI discovery ---
     if not args.core:
         print("ERROR: --core is required for discovery mode")
         sys.exit(1)

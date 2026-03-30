@@ -136,6 +136,16 @@ Fan-out only occurs at depth 0 (the starting switch). Edge switches discovered v
 
 Fan-out mode uses concurrent threading (`--workers`, default 10) to SSH to multiple edge switches in parallel.
 
+#### Switch Inventory Mode (`--switch-inventory`)
+
+Crawl the entire switching fabric via CDP/LLDP and return a list of every reachable switch — no OUI list required. Connects to the starting switch, collects all CDP/LLDP neighbors, and recursively visits every one of them at all depths (not limited to depth 0 like fan-out).
+
+Each switch is recorded with its hostname, management IP, detected platform, hop count from the starting switch, and the upstream switch/interface it was reached through.
+
+Uses the same dedup guards as normal discovery: IP-based visited tracking and hostname-based dedup (case-insensitive) to prevent re-crawling the same switch via different management IPs. Respects `--max-depth`, `--workers`, and `--mgmt-subnet`.
+
+Output CSV columns: `switch_hostname`, `switch_ip`, `platform`, `discovery_depth`, `upstream_hostname`, `upstream_ip`, `upstream_interface`.
+
 ### Discovery Workflow
 
 **Step 1 — Connect to the starting switch.** Auto-detect or use the forced platform.
@@ -184,6 +194,27 @@ When a multi-MAC port also has a CDP/LLDP neighbor, the tool recurses to that ne
 ---
 
 ## Part 4: Command Reference
+
+### Switch inventory — list all switches in the fabric
+
+```
+python3 oui_port_mapper_v4.0.py \
+  --core 10.1.1.1 \
+  --user admin \
+  --switch-inventory \
+  --output switches.csv
+```
+
+No OUI list needed. Crawls via CDP/LLDP and records every reachable switch. Use `--mgmt-subnet` to restrict which neighbors are visited.
+
+```
+python3 oui_port_mapper_v4.0.py \
+  --core 10.1.1.1 \
+  --user admin \
+  --switch-inventory \
+  --mgmt-subnet 10.10.0.0/24 \
+  --output switches.csv
+```
 
 ### Basic discovery — auto-detect platform
 
@@ -540,7 +571,7 @@ Multi-MAC ports with no CDP/LLDP neighbor get recorded with a note. The tool can
 
 | Version | Changes |
 |---------|---------|
-| v4.0 | Concurrent recursion at all depths, `--save-config` to persist to startup, `--vlan-assign` for VLAN reassignment with platform-correct STP edge hardening, `--mac-threshold` for dual-NIC devices, `--mgmt-subnet` filter for LLDP-advertising endpoints |
+| v4.0 | Concurrent recursion at all depths, `--save-config` to persist to startup, `--vlan-assign` for VLAN reassignment with platform-correct STP edge hardening, `--mac-threshold` for dual-NIC devices, `--mgmt-subnet` filter for LLDP-advertising endpoints, `--switch-inventory` fabric topology crawl via CDP/LLDP |
 | v3.0 | Fan-out mode (depth-0 only), concurrent fan-out threading, hostname dedup, access-port-only safety filter, port-cycle operation, MAC dedup in CSV export, VLAN tracking |
 | v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS `~~~` age field fix, recursive discovery |
 | v1.0 | Initial single-hop core-only discovery |
