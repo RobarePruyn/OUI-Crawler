@@ -1044,66 +1044,30 @@ VERSION_FINGERPRINTS: list[tuple[str, str]] = [
 ]
 
 
-def detect_platform(
+def _fingerprint_via_show_version(
     host: str,
     username: str,
     password: str,
     enable_secret: str,
     log: logging.Logger,
+    hint: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[object]]:
     """
-    Auto-detect the platform of a network device by SSH fingerprinting.
+    Connect to a device, run 'show version', and fingerprint the output.
 
-    Uses netmiko's SSHDetect first, then validates with 'show version'
-    output if needed. Returns (device_type, active_connection) or
-    (None, None) on failure.
-
-    The connection is returned still open so the caller doesn't have to
-    reconnect after detection.
+    If hint is provided, that device_type is tried first (likely to
+    succeed if the fabric is homogeneous). Returns (device_type,
+    connection) where connection is kept open if we connected with
+    the matching type, or (device_type, None) if a reconnect is needed.
     """
-    log.info(f"Auto-detecting platform for {host}...")
+    # Build try order: hint first (if valid), then the standard types
+    standard_types = ["cisco_ios", "cisco_nxos", "aruba_aoscx"]
+    if hint and hint in standard_types:
+        try_order = [hint] + [t for t in standard_types if t != hint]
+    else:
+        try_order = standard_types
 
-    # --- Attempt 1: netmiko SSHDetect ---
-    try:
-        detect_params = {
-            "device_type": "autodetect",
-            "host": host,
-            "username": username,
-            "password": password,
-            "secret": enable_secret,
-            "timeout": 30,
-        }
-        detector = SSHDetect(**detect_params)
-        best_match = detector.autodetect()
-        log.info(f"SSHDetect result for {host}: {best_match}")
-
-        if best_match and best_match in PLATFORM_MAP:
-            # SSHDetect's internal connection is not fully set up for
-            # reliable command execution, so disconnect and let the
-            # caller reconnect with the proper device_type.
-            # Remap to the correct netmiko driver if needed (e.g.,
-            # SSHDetect returns aruba_osswitch for AOS-CX hardware).
-            remapped = DEVICE_TYPE_REMAP.get(best_match, best_match)
-            if remapped != best_match:
-                log.info(
-                    f"Remapping SSHDetect result '{best_match}' → "
-                    f"'{remapped}' for {host}"
-                )
-            detector.connection.disconnect()
-            return remapped, None
-
-        if best_match:
-            log.debug(
-                f"SSHDetect returned '{best_match}' which is not in "
-                f"our platform map; trying show version fingerprint"
-            )
-            detector.connection.disconnect()
-
-    except Exception as exc:
-        log.debug(f"SSHDetect failed for {host}: {exc}")
-
-    # --- Attempt 2: Connect generic, run 'show version', fingerprint ---
-    for try_type in ["cisco_ios", "cisco_nxos", "aruba_aoscx"]:
+    for try_type in try_order:
         try:
             conn_params = {
                 "device_type": try_type,
@@ -1111,8 +1075,8 @@ def detect_platform(
                 "username": username,
                 "password": password,
                 "secret": enable_secret,
-                "timeout": 30,
-                "read_timeout_override": 30,
+                "timeout": 15,
+                "read_timeout_override": 15,
             }
             conn = ConnectHandler(**conn_params)
             conn.enable()
@@ -1123,14 +1087,11 @@ def detect_platform(
                 if re.search(pattern, version_output, re.IGNORECASE):
                     log.info(
                         f"Fingerprinted {host} as {device_type} "
-                        f"via 'show version'"
+                        f"via 'show version' (connected as {try_type})"
                     )
                     # If we connected with the right type, return the
                     # live connection so the caller doesn't have to reconnect
-                    if try_type == device_type or (
-                        try_type == "cisco_ios"
-                        and device_type == "cisco_ios"
-                    ):
+                    if try_type == device_type:
                         return device_type, conn
                     else:
                         conn.disconnect()
@@ -1146,6 +1107,67 @@ def detect_platform(
         except Exception as exc:
             log.debug(f"Connection as {try_type} to {host} failed: {exc}")
             continue
+
+    return None, None
+
+
+def detect_platform(
+    host: str,
+    username: str,
+    password: str,
+    enable_secret: str,
+    log: logging.Logger,
+    hint: Optional[str] = None,
+) -> tuple[Optional[str], Optional[object]]:
+    """
+    Auto-detect the platform of a network device.
+
+    Strategy (fast to slow):
+      1. Connect and fingerprint 'show version' output. If hint is
+         provided (last successful platform), try that type first so
+         homogeneous fabrics get a single SSH session per switch.
+      2. Fall back to netmiko SSHDetect as a last resort.
+
+    Returns (device_type, active_connection) or (None, None) on failure.
+    The connection is returned still open when we connected with the
+    matching type, saving a reconnect.
+    """
+    log.info(f"Auto-detecting platform for {host}...")
+
+    # --- Attempt 1: show version fingerprint (fast path) ---
+    device_type, conn = _fingerprint_via_show_version(
+        host, username, password, enable_secret, log, hint=hint,
+    )
+    if device_type:
+        return device_type, conn
+
+    # --- Attempt 2: SSHDetect as last resort ---
+    log.info(f"Show version fingerprint failed for {host}; trying SSHDetect...")
+    try:
+        detect_params = {
+            "device_type": "autodetect",
+            "host": host,
+            "username": username,
+            "password": password,
+            "secret": enable_secret,
+            "timeout": 30,
+        }
+        detector = SSHDetect(**detect_params)
+        best_match = detector.autodetect()
+        log.info(f"SSHDetect result for {host}: {best_match}")
+        detector.connection.disconnect()
+
+        if best_match and best_match in PLATFORM_MAP:
+            remapped = DEVICE_TYPE_REMAP.get(best_match, best_match)
+            if remapped != best_match:
+                log.info(
+                    f"Remapping SSHDetect result '{best_match}' → "
+                    f"'{remapped}' for {host}"
+                )
+            return remapped, None
+
+    except Exception as exc:
+        log.debug(f"SSHDetect failed for {host}: {exc}")
 
     log.error(f"Platform auto-detection failed for {host}")
     return None, None
@@ -1208,6 +1230,7 @@ class OUIPortMapper:
         self.mac_threshold = mac_threshold
         self.save_config = save_config
         self.dry_run = dry_run
+        self._last_detected_platform: Optional[str] = None
 
         # Management subnet filter: if set, only recurse into neighbors
         # whose management IP falls within this subnet. Prevents the
@@ -1283,16 +1306,19 @@ class OUIPortMapper:
             resolved_type = self.visited_switches[target_ip]
             reuse_conn = None
         else:
-            # Auto-detect
+            # Auto-detect, passing last successful type as hint
             resolved_type, reuse_conn = detect_platform(
                 host=target_ip,
                 username=self.username,
                 password=self.password,
                 enable_secret=self.enable_secret,
                 log=self.log,
+                hint=self._last_detected_platform,
             )
             if not resolved_type:
                 return None, None
+            # Remember for next switch
+            self._last_detected_platform = resolved_type
 
         platform = get_platform(resolved_type)
 

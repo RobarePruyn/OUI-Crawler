@@ -74,6 +74,7 @@ class OUIPortMapper:
         self.save_config = save_config
         self.progress_callback = progress_callback
         self._cancelled = False
+        self._last_detected_platform: Optional[str] = None
 
         # Management subnet filter: if set, only recurse into neighbors
         # whose management IP falls within this subnet. Prevents the
@@ -165,16 +166,19 @@ class OUIPortMapper:
             resolved_type = self.visited_switches[target_ip]
             reuse_conn = None
         else:
-            # Auto-detect
+            # Auto-detect, passing last successful type as hint
             resolved_type, reuse_conn = detect_platform(
                 host=target_ip,
                 username=self.username,
                 password=self.password,
                 enable_secret=self.enable_secret,
                 log=self.log,
+                hint=self._last_detected_platform,
             )
             if not resolved_type:
                 return None, None
+            # Remember for next switch
+            self._last_detected_platform = resolved_type
 
         platform = get_platform(resolved_type)
 
