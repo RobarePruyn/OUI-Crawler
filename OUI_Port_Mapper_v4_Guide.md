@@ -440,7 +440,69 @@ python3 oui_port_mapper_v4.0.py \
   --save-config
 ```
 
-The tool runs `write memory` on each switch after applying changes. This works with `--shutdown`, `--no-shutdown`, `--port-cycle`, and `--vlan-assign`.
+The tool runs `write memory` on each switch after applying changes. This works with `--shutdown`, `--no-shutdown`, `--port-cycle`, `--vlan-assign`, and `--set-description`.
+
+### Port Status Check (`--port-status`)
+
+Verify the current operational state of all ports in a CSV. Read-only — no config changes, no confirmation prompt. SSHes to each switch once and checks interface status.
+
+```
+python3 oui_port_mapper_v4.0.py \
+  --from-csv discovery.csv \
+  --user admin \
+  --port-status
+```
+
+Output shows each port's link state (up, down, err-disabled, notconnect) and speed/duplex. A summary line at the end counts up/down/err-disabled ports. Useful for verifying that ports came back up after a port-cycle, or catching err-disabled ports that need recovery.
+
+### Interface Descriptions (`--set-description`)
+
+Push interface descriptions to discovered access ports. Same safety filter as other port actions — only clean access-port finds are acted on.
+
+```
+# Dry run
+python3 oui_port_mapper_v4.0.py \
+  --from-csv discovery.csv \
+  --user admin \
+  --set-description \
+  --desc-template "{mac} {ip}" \
+  --dry-run
+
+# Live with save
+python3 oui_port_mapper_v4.0.py \
+  --from-csv discovery.csv \
+  --user admin \
+  --set-description \
+  --desc-template "{mac} {ip}" \
+  --save-config
+```
+
+Template placeholders:
+
+| Placeholder | Value |
+|---|---|
+| `{mac}` | MAC address in Cisco dotted notation |
+| `{ip}` | IP address from ARP ("unknown" if no ARP entry) |
+| `{oui}` | Matched OUI prefix |
+| `{vlan}` | VLAN number |
+| `{hostname}` | Switch hostname |
+
+Default template is `{mac} {ip}`. Descriptions are truncated to 80 characters for cross-platform safety (Aruba AOS-CX limit).
+
+### CSV Diff (`--diff`)
+
+Compare two CSV exports and report new, missing, and moved devices. No SSH required — purely offline comparison keyed by MAC address.
+
+```
+python3 oui_port_mapper_v4.0.py --diff old_discovery.csv new_discovery.csv
+```
+
+Output sections:
+- **New devices** — in the new CSV but not the old
+- **Missing devices** — in the old CSV but not the new (powered off, removed, or MAC aged out)
+- **Moved devices** — same MAC, different switch or port (device was re-patched or moved to a different IDF)
+
+Useful for pre/post-event checks, tracking devices between site visits, or verifying that a VLAN migration didn't lose any endpoints.
 
 ---
 
@@ -571,7 +633,7 @@ Multi-MAC ports with no CDP/LLDP neighbor get recorded with a note. The tool can
 
 | Version | Changes |
 |---------|---------|
-| v4.0 | Concurrent recursion at all depths, `--save-config` to persist to startup, `--vlan-assign` for VLAN reassignment with platform-correct STP edge hardening, `--mac-threshold` for dual-NIC devices, `--mgmt-subnet` filter for LLDP-advertising endpoints, `--switch-inventory` fabric topology crawl via CDP/LLDP |
+| v4.0 | Concurrent recursion at all depths, `--save-config`, `--vlan-assign` with STP hardening, `--mac-threshold`, `--mgmt-subnet`, `--switch-inventory`, `--port-status`, `--set-description`, `--diff` |
 | v3.0 | Fan-out mode (depth-0 only), concurrent fan-out threading, hostname dedup, access-port-only safety filter, port-cycle operation, MAC dedup in CSV export, VLAN tracking |
 | v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS `~~~` age field fix, recursive discovery |
 | v1.0 | Initial single-hop core-only discovery |

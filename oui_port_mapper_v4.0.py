@@ -85,11 +85,23 @@ Usage:
   # Switch inventory — crawl fabric and list all switches
   python oui_port_mapper.py --core 10.1.1.1 --user admin --switch-inventory
 
+  # Check port status from CSV
+  python oui_port_mapper.py --from-csv inventory.csv --user admin --port-status
+
+  # Push interface descriptions from CSV
+  python oui_port_mapper.py --from-csv inventory.csv --user admin --set-description --desc-template "{mac} {ip}"
+
+  # Compare two CSV exports
+  python oui_port_mapper.py --diff old_inventory.csv new_inventory.csv
+
 Version History:
   v4.0  — Concurrent recursion at all depths (ThreadPoolExecutor),
            --save-config to persist changes to startup-config,
            platform-correct write-memory commands,
-           --switch-inventory for fabric topology crawl via CDP/LLDP.
+           --switch-inventory for fabric topology crawl via CDP/LLDP,
+           --port-status for verifying port state from CSV,
+           --set-description for pushing interface descriptions,
+           --diff for comparing CSV exports across runs.
   v3.3  — VLAN reassignment (--vlan-assign) moves access ports to the
            tracked VLAN for their switch. Platform-aware commands for
            Cisco IOS/NX-OS and Aruba AOS-CX.
@@ -2710,6 +2722,418 @@ class OUIPortMapper:
             f"\nVLAN REASSIGNMENT complete on {changed_count} port(s)."
         )
 
+    # ------------------------------------------------------------------
+    # Port status check
+    # ------------------------------------------------------------------
+
+    def check_port_status(
+        self,
+        records: list[DeviceRecord],
+    ):
+        """
+        SSH to each switch in the record list and check the current
+        operational status of each recorded interface. Prints a table
+        showing hostname, interface, MAC, link state, and speed/duplex.
+
+        Groups by switch IP so each switch gets a single SSH session.
+        No safety filter — reads only, no config changes.
+        """
+        if not records:
+            print("No records to check.")
+            return
+
+        # Group by switch IP
+        by_switch: dict[str, list[DeviceRecord]] = {}
+        for r in records:
+            if r.interface.lower() in ("unknown", "not found"):
+                continue
+            by_switch.setdefault(r.switch_ip, []).append(r)
+
+        # Collect results: (record, status_line)
+        results: list[tuple[DeviceRecord, str, str, str]] = []
+
+        for switch_ip, switch_records in by_switch.items():
+            platform_name = switch_records[0].platform or "cisco_ios"
+            conn, platform = self._connect(switch_ip, device_type=platform_name)
+            if not conn:
+                self.log.error(
+                    f"Cannot connect to {switch_ip} for status check"
+                )
+                for r in switch_records:
+                    results.append((r, "unreachable", "", ""))
+                continue
+
+            try:
+                # Pull interface status for the whole switch once
+                if platform_name in ("aruba_aoscx", "aruba_osswitch"):
+                    raw = conn.send_command("show interface brief")
+                else:
+                    raw = conn.send_command("show interface status")
+
+                # Parse into a lookup: normalized_interface → (status, speed_duplex)
+                status_lookup = self._parse_interface_status(
+                    raw, platform_name
+                )
+
+                for r in switch_records:
+                    intf_key = r.interface.lower().strip()
+                    if intf_key in status_lookup:
+                        link_state, detail = status_lookup[intf_key]
+                        results.append((r, link_state, detail, ""))
+                    else:
+                        results.append((r, "not found in status", "", ""))
+
+            finally:
+                conn.disconnect()
+
+        # Print results table
+        print(f"\n{'='*100}")
+        print(f"  PORT STATUS CHECK — {len(results)} port(s)")
+        print(f"{'='*100}")
+        print(
+            f"  {'Switch':<22s} {'Interface':<22s} {'MAC':<16s} "
+            f"{'IP':<16s} {'Status':<14s} {'Detail'}"
+        )
+        print(f"  {'-'*96}")
+
+        up_count = 0
+        down_count = 0
+        err_count = 0
+        other_count = 0
+
+        for r, link_state, detail, _ in results:
+            state_lower = link_state.lower()
+            if "up" in state_lower and "down" not in state_lower:
+                up_count += 1
+            elif "err" in state_lower or "disabled" in state_lower:
+                err_count += 1
+            elif "down" in state_lower or "not connect" in state_lower:
+                down_count += 1
+            else:
+                other_count += 1
+
+            print(
+                f"  {r.switch_hostname:<22s} {r.interface:<22s} "
+                f"{r.mac_address:<16s} {r.ip_address:<16s} "
+                f"{link_state:<14s} {detail}"
+            )
+
+        print(f"{'='*100}")
+        print(
+            f"  Up: {up_count}  |  Down: {down_count}  |  "
+            f"Err-disabled: {err_count}  |  Other: {other_count}"
+        )
+        print(f"{'='*100}\n")
+
+    @staticmethod
+    def _parse_interface_status(
+        raw_output: str,
+        platform_name: str,
+    ) -> dict[str, tuple[str, str]]:
+        """
+        Parse 'show interface status' (Cisco) or 'show interface brief'
+        (Aruba) into a dict mapping normalized interface name to
+        (link_state, detail_string).
+        """
+        lookup: dict[str, tuple[str, str]] = {}
+
+        if platform_name in ("aruba_aoscx", "aruba_osswitch"):
+            # AOS-CX 'show interface brief' format:
+            #   Port   Status   ...
+            #   1/1/1  up       ...
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("-") or line.lower().startswith("port"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2:
+                    intf = parts[0].lower().strip()
+                    state = parts[1].lower().strip()
+                    detail = " ".join(parts[2:]) if len(parts) > 2 else ""
+                    lookup[intf] = (state, detail)
+        else:
+            # Cisco IOS/NX-OS 'show interface status' format:
+            #   Port      Name   Status       Vlan  Duplex  Speed  Type
+            #   Gi1/0/1          connected    10    a-full  a-1000 10/100/1000BaseTX
+            # NX-OS:
+            #   Port       Name   Status    Vlan   Duplex  Speed   Type
+            #   Eth1/1     --     connected trunk  full    10G     10Gbase-SR
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("-") or line.lower().startswith("port"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 3:
+                    intf = parts[0].lower().strip()
+                    # Find the status keyword — it's the first token that
+                    # matches a known state
+                    known_states = {
+                        "connected", "notconnect", "disabled",
+                        "err-disabled", "up", "down", "sfpAbsent",
+                        "xcvrAbsen", "noOperMem", "channelDo",
+                    }
+                    state = ""
+                    detail_parts = []
+                    found_state = False
+                    for i, p in enumerate(parts[1:], 1):
+                        if not found_state and p.lower().rstrip("*") in {
+                            s.lower() for s in known_states
+                        }:
+                            state = p.lower().rstrip("*")
+                            found_state = True
+                            detail_parts = parts[i + 1:]
+                            break
+
+                    if not state:
+                        # Fallback: assume second-to-last-ish field
+                        state = parts[2].lower() if len(parts) > 2 else "unknown"
+                        detail_parts = parts[3:] if len(parts) > 3 else []
+
+                    detail = " ".join(detail_parts)
+                    lookup[intf] = (state, detail)
+
+        return lookup
+
+    # ------------------------------------------------------------------
+    # Interface description push
+    # ------------------------------------------------------------------
+
+    def set_descriptions(
+        self,
+        records: list[DeviceRecord],
+        template: str = "{mac} {ip}",
+    ):
+        """
+        Push interface descriptions to discovered access ports based on
+        a user-supplied template. Same safety filter as other port actions.
+
+        Template placeholders:
+          {mac}       — MAC address (Cisco dotted)
+          {ip}        — IP address from ARP
+          {oui}       — matched OUI prefix
+          {vlan}      — VLAN number
+          {hostname}  — switch hostname
+        """
+        # --- Same safety filter as toggle_ports ---
+        skip_keywords = {"unknown", "not found", "unreachable"}
+        trunk_keywords = {"port-channel", "po", "lag", "vpc", "peer-link"}
+
+        actionable = []
+        skipped = 0
+
+        for r in records:
+            intf_lower = r.interface.lower()
+            if any(kw in intf_lower for kw in skip_keywords):
+                skipped += 1
+                continue
+            if any(kw in intf_lower for kw in trunk_keywords):
+                skipped += 1
+                continue
+            if r.notes.strip():
+                skipped += 1
+                continue
+            actionable.append(r)
+
+        if skipped:
+            self.log.info(
+                f"Safety filter: {len(records)} total → "
+                f"{len(actionable)} actionable ({skipped} excluded)"
+            )
+
+        if not actionable:
+            self.log.info(
+                "No actionable ports found after safety filter."
+            )
+            return
+
+        # Build description for each record
+        planned: list[tuple[DeviceRecord, str]] = []
+        for r in actionable:
+            desc = template.format(
+                mac=r.mac_address,
+                ip=r.ip_address,
+                oui=r.matched_oui,
+                vlan=r.vlan,
+                hostname=r.switch_hostname,
+            )
+            # Cisco IOS limits descriptions to 240 chars, NX-OS to 254,
+            # Aruba AOS-CX to 80. Truncate to 80 for safety.
+            desc = desc[:80]
+            planned.append((r, desc))
+
+        # Display plan
+        print(f"\n{'='*90}")
+        print(f"  SET INTERFACE DESCRIPTIONS")
+        print(f"  Ports to update: {len(planned)}")
+        print(f"  Template: {template}")
+        print(f"{'='*90}")
+        for r, desc in planned:
+            print(
+                f"  {r.switch_hostname:<22s} {r.interface:<22s} → \"{desc}\""
+            )
+        print(f"{'='*90}\n")
+
+        if self.dry_run:
+            print("[DRY RUN] No changes will be made.")
+            return
+
+        confirm = input(
+            f"Type 'YES' to set descriptions on "
+            f"{len(planned)} port(s): "
+        )
+        if confirm != "YES":
+            print("Aborted. No changes made.")
+            return
+
+        # Group by switch IP
+        by_switch: dict[str, list[tuple[DeviceRecord, str]]] = {}
+        for r, desc in planned:
+            by_switch.setdefault(r.switch_ip, []).append((r, desc))
+
+        changed_count = 0
+        for switch_ip, switch_records in by_switch.items():
+            platform_name = switch_records[0][0].platform or "cisco_ios"
+            platform = get_platform(platform_name)
+
+            conn, _ = self._connect(switch_ip, device_type=platform_name)
+            if not conn:
+                self.log.error(
+                    f"Cannot connect to {switch_ip} for description push"
+                )
+                continue
+
+            try:
+                config_commands = []
+                for r, desc in switch_records:
+                    config_commands.append(f"interface {r.interface}")
+                    config_commands.append(f"description {desc}")
+                    self.log.info(
+                        f"  description: {r.switch_hostname} "
+                        f"{r.interface} → \"{desc}\""
+                    )
+                    changed_count += 1
+
+                output = conn.send_config_set(config_commands)
+                self.log.debug(f"Config output:\n{output}")
+                self._maybe_save_config(conn, platform, switch_ip)
+
+            finally:
+                conn.disconnect()
+
+        print(
+            f"\nDESCRIPTION SET complete on {changed_count} port(s)."
+        )
+
+    # ------------------------------------------------------------------
+    # CSV diff
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def diff_csv(old_file: str, new_file: str):
+        """
+        Compare two OUI Port Mapper CSV exports and report:
+          - New devices (in new but not old)
+          - Missing devices (in old but not new)
+          - Moved devices (same MAC, different switch or port)
+        Keyed by MAC address.
+        """
+        def load_csv_by_mac(filename: str) -> dict[str, dict]:
+            result = {}
+            with open(filename, "r") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    mac = row.get("mac_address", "").strip()
+                    if mac:
+                        result[mac] = row
+            return result
+
+        old_records = load_csv_by_mac(old_file)
+        new_records = load_csv_by_mac(new_file)
+
+        old_macs = set(old_records.keys())
+        new_macs = set(new_records.keys())
+
+        added = new_macs - old_macs
+        removed = old_macs - new_macs
+        common = old_macs & new_macs
+
+        # Check for moves: same MAC, different switch or port
+        moved: list[tuple[str, dict, dict]] = []
+        for mac in common:
+            old = old_records[mac]
+            new = new_records[mac]
+            if (old.get("switch_ip") != new.get("switch_ip")
+                    or old.get("interface") != new.get("interface")):
+                moved.append((mac, old, new))
+
+        # Print report
+        print(f"\n{'='*90}")
+        print(f"  CSV DIFF: {old_file} → {new_file}")
+        print(f"{'='*90}")
+        print(
+            f"  Old: {len(old_records)} device(s)  |  "
+            f"New: {len(new_records)} device(s)"
+        )
+        print(
+            f"  Added: {len(added)}  |  Removed: {len(removed)}  |  "
+            f"Moved: {len(moved)}  |  Unchanged: "
+            f"{len(common) - len(moved)}"
+        )
+        print(f"{'='*90}")
+
+        if added:
+            print(f"\n  NEW DEVICES ({len(added)}):")
+            print(
+                f"  {'MAC':<16s} {'Switch':<22s} {'Interface':<22s} "
+                f"{'IP':<16s} {'VLAN'}"
+            )
+            print(f"  {'-'*82}")
+            for mac in sorted(added):
+                r = new_records[mac]
+                print(
+                    f"  {mac:<16s} {r.get('switch_hostname', ''):<22s} "
+                    f"{r.get('interface', ''):<22s} "
+                    f"{r.get('ip_address', ''):<16s} "
+                    f"{r.get('vlan', '')}"
+                )
+
+        if removed:
+            print(f"\n  MISSING DEVICES ({len(removed)}):")
+            print(
+                f"  {'MAC':<16s} {'Switch':<22s} {'Interface':<22s} "
+                f"{'IP':<16s} {'VLAN'}"
+            )
+            print(f"  {'-'*82}")
+            for mac in sorted(removed):
+                r = old_records[mac]
+                print(
+                    f"  {mac:<16s} {r.get('switch_hostname', ''):<22s} "
+                    f"{r.get('interface', ''):<22s} "
+                    f"{r.get('ip_address', ''):<16s} "
+                    f"{r.get('vlan', '')}"
+                )
+
+        if moved:
+            print(f"\n  MOVED DEVICES ({len(moved)}):")
+            print(
+                f"  {'MAC':<16s} {'From Switch':<22s} {'From Port':<15s} "
+                f"{'To Switch':<22s} {'To Port'}"
+            )
+            print(f"  {'-'*86}")
+            for mac, old, new in sorted(moved, key=lambda x: x[0]):
+                print(
+                    f"  {mac:<16s} "
+                    f"{old.get('switch_hostname', ''):<22s} "
+                    f"{old.get('interface', ''):<15s} "
+                    f"{new.get('switch_hostname', ''):<22s} "
+                    f"{new.get('interface', '')}"
+                )
+
+        if not added and not removed and not moved:
+            print("\n  No changes detected.")
+
+        print(f"\n{'='*90}\n")
+
 
 # ---------------------------------------------------------------------------
 # CLI entry point
@@ -2865,6 +3289,30 @@ def parse_arguments() -> argparse.Namespace:
             "switch_tracked_vlan data in the CSV."
         ),
     )
+    act_mx.add_argument(
+        "--port-status", action="store_true",
+        help=(
+            "Check current operational status (up/down/err-disabled) "
+            "of all ports in the CSV. Read-only — no config changes."
+        ),
+    )
+    act_mx.add_argument(
+        "--set-description", action="store_true",
+        help=(
+            "Push interface descriptions to discovered access ports. "
+            "Uses --desc-template for the description format. "
+            "Same safety filter as other port actions."
+        ),
+    )
+    act.add_argument(
+        "--desc-template",
+        default="{mac} {ip}",
+        help=(
+            "Template for --set-description. Placeholders: "
+            "{mac}, {ip}, {oui}, {vlan}, {hostname}. "
+            "Default: '{mac} {ip}'. Truncated to 80 chars."
+        ),
+    )
     act.add_argument(
         "--cycle-delay", type=int, default=5,
         help="Seconds to wait between shut and no-shut (default: 5)",
@@ -2885,6 +3333,13 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--from-csv",
         help="Load records from CSV instead of running discovery",
+    )
+    parser.add_argument(
+        "--diff", nargs=2, metavar=("OLD_CSV", "NEW_CSV"),
+        help=(
+            "Compare two CSV exports and report new, missing, and "
+            "moved devices. No SSH needed."
+        ),
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
@@ -2915,13 +3370,23 @@ def load_oui_list(args: argparse.Namespace) -> list[str]:
 def main():
     args = parse_arguments()
 
+    # --- Mode 0: CSV diff (no SSH, no credentials) ---
+    if args.diff:
+        OUIPortMapper.diff_csv(args.diff[0], args.diff[1])
+        return
+
     # --- Mode 1: Act on saved CSV ---
     if args.from_csv:
-        if not (args.shutdown or args.no_shutdown or args.port_cycle
-                or args.vlan_assign):
+        has_action = (
+            args.shutdown or args.no_shutdown or args.port_cycle
+            or args.vlan_assign or args.port_status
+            or args.set_description
+        )
+        if not has_action:
             print(
-                "ERROR: --from-csv requires --shutdown, --no-shutdown, "
-                "--port-cycle, or --vlan-assign"
+                "ERROR: --from-csv requires an action flag: --shutdown, "
+                "--no-shutdown, --port-cycle, --vlan-assign, "
+                "--port-status, or --set-description"
             )
             sys.exit(1)
 
@@ -2946,6 +3411,10 @@ def main():
             mapper.cycle_ports(records, delay_seconds=args.cycle_delay)
         elif args.vlan_assign:
             mapper.assign_vlans(records)
+        elif args.port_status:
+            mapper.check_port_status(records)
+        elif args.set_description:
+            mapper.set_descriptions(records, template=args.desc_template)
         else:
             action = "shutdown" if args.shutdown else "no shutdown"
             mapper.toggle_ports(records, action=action)
@@ -3034,6 +3503,12 @@ def main():
             mapper.cycle_ports(discovered, delay_seconds=args.cycle_delay)
         elif args.vlan_assign:
             mapper.assign_vlans(discovered)
+        elif args.port_status:
+            mapper.check_port_status(discovered)
+        elif args.set_description:
+            mapper.set_descriptions(
+                discovered, template=args.desc_template
+            )
     else:
         print("No matching devices found. No CSV exported.")
 

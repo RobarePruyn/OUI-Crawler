@@ -251,6 +251,44 @@ Per port, the tool pushes the access VLAN plus STP edge hardening:
   Cisco:  switchport access vlan N / spanning-tree portfast /
           spanning-tree bpduguard enable
 
+### TASK 7: CHECK PORT STATUS (after port-cycle or shutdown)
+
+After running a port-cycle or shutdown, verify that all ports came
+back up correctly. This is read-only — no changes are made.
+
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-status
+
+The output shows each port's current state (up, down, err-disabled)
+and a summary count. Err-disabled ports may need manual recovery.
+
+
+### TASK 8: LABEL PORTS WITH INTERFACE DESCRIPTIONS
+
+Push descriptions to each discovered access port so they show up
+in show interface status. Useful for documenting what's plugged in.
+
+Dry run first:
+
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --set-description --desc-template "{mac} {ip}" --dry-run
+
+Live with save:
+
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --set-description --desc-template "{mac} {ip}" --save-config
+
+Template placeholders: {mac}, {ip}, {oui}, {vlan}, {hostname}.
+Descriptions are truncated to 80 characters.
+
+
+### TASK 9: COMPARE TWO DISCOVERY RUNS
+
+See what changed between two discovery exports. No SSH needed.
+
+    python3 oui_port_mapper_v4.0.py --diff old_results.csv new_results.csv
+
+Shows new devices, missing devices, and devices that moved to a
+different switch or port. Useful for pre/post-event checks.
+
+
 ---
 
 ## IMPORTANT NOTES
@@ -314,6 +352,18 @@ On Windows, use `python` instead of `python3`.
 
     # Re-enable from CSV (for real)
     python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --no-shutdown
+
+    # Check port status from CSV
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --port-status
+
+    # Set interface descriptions (dry run first)
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --set-description --desc-template "{mac} {ip}" --dry-run
+
+    # Set interface descriptions (live, with save)
+    python3 oui_port_mapper_v4.0.py --from-csv discovery_results.csv --user SSH_USERNAME --set-description --desc-template "{mac} {ip}" --save-config
+
+    # Compare two discovery runs
+    python3 oui_port_mapper_v4.0.py --diff old_results.csv new_results.csv
 
 ---
 

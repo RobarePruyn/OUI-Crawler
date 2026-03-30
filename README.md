@@ -20,6 +20,9 @@ Multi-platform network automation tool that locates devices by OUI prefix across
 - **Management subnet filter** (`--mgmt-subnet`) prevents recursion into LLDP-advertising endpoints
 - **Save config** (`--save-config`) persists changes to startup-config
 - **Switch inventory** (`--switch-inventory`) crawls the fabric via CDP/LLDP and lists every reachable switch with hostname, management IP, platform, and upstream link — no OUI list required
+- **Port status check** (`--port-status`) verifies current operational state (up/down/err-disabled) of all ports in a CSV
+- **Interface descriptions** (`--set-description`) pushes port descriptions from discovery data with customizable templates
+- **CSV diff** (`--diff`) compares two exports to show new, missing, and moved devices between runs
 - **CSV export** with MAC deduplication (clean finds prioritized over uplink records)
 
 ## Requirements
@@ -70,6 +73,25 @@ python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --port-cyc
 python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --port-cycle --cycle-delay 5
 ```
 
+### Port status check from CSV
+```bash
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --port-status
+```
+
+### Push interface descriptions from CSV
+```bash
+# Dry run first
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --set-description --desc-template "{mac} {ip}" --dry-run
+
+# Live with save
+python3 oui_port_mapper_v4.0.py --from-csv discovery.csv --user admin --set-description --desc-template "{mac} {ip}" --save-config
+```
+
+### Compare two discovery runs
+```bash
+python3 oui_port_mapper_v4.0.py --diff old_discovery.csv new_discovery.csv
+```
+
 ## OUI File Format
 
 One OUI per line, `#` comments supported:
@@ -95,7 +117,7 @@ All changes are **running-config only** by default — a reload reverts them. Us
 
 | Version | Changes |
 |---------|---------|
-| v4.0 | Concurrent recursion at all depths, `--save-config`, `--vlan-assign` with platform STP hardening, `--mac-threshold`, `--mgmt-subnet`, `--switch-inventory` fabric topology crawl |
+| v4.0 | Concurrent recursion at all depths, `--save-config`, `--vlan-assign` with platform STP hardening, `--mac-threshold`, `--mgmt-subnet`, `--switch-inventory`, `--port-status`, `--set-description`, `--diff` |
 | v3.0 | Fan-out mode, concurrent fan-out threading, hostname dedup, safety filter, port-cycle, VLAN tracking, CSV dedup |
 | v2.0 | Multi-platform support (IOS, NX-OS, AOS-CX), port-channel traversal, NX-OS parser fixes, recursive discovery |
 | v1.0 | Initial single-hop core-only discovery |
