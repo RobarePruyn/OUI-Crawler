@@ -99,6 +99,7 @@ label.required::after {
 .checkbox-row label {
     margin-bottom: 0;
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .checkbox-row .field-help {
