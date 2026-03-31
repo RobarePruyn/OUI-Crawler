@@ -26,6 +26,15 @@ def _new_uuid() -> str:
     return str(uuid.uuid4())
 
 
+# ── App Settings ────────────────────────────────────────────────────
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)
+
+
 # ── Users ────────────────────────────────────────────────────────────
 
 class User(Base):

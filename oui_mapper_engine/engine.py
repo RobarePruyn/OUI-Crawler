@@ -1368,6 +1368,62 @@ class OUIPortMapper:
             skipped_bad_intf=skipped_bad_intf,
         )
 
+    def _toggle_one_switch(
+        self,
+        switch_ip: str,
+        switch_records: list[DeviceRecord],
+        action: str,
+    ) -> list[ActionResult]:
+        """Toggle ports on a single switch. Thread-safe."""
+        platform_name = switch_records[0].platform or "cisco_ios"
+        platform = get_platform(platform_name)
+
+        conn, _ = self._connect(switch_ip, device_type=platform_name)
+        if not conn:
+            self.log.error(f"Cannot connect to {switch_ip} for port changes")
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=action,
+                    status="failed", error=f"Cannot connect to {switch_ip}",
+                )
+                for r in switch_records
+            ]
+
+        try:
+            config_commands = []
+            for r in switch_records:
+                if action == "shutdown":
+                    cmds = platform.get_shutdown_commands(r.interface)
+                else:
+                    cmds = platform.get_no_shutdown_commands(r.interface)
+                config_commands.extend(cmds)
+                self.log.info(f"  {action}: {r.switch_hostname} {r.interface}")
+
+            output = conn.send_config_set(config_commands)
+            self.log.debug(f"Config output:\n{output}")
+            self._maybe_save_config(conn, platform, switch_ip)
+
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=action, status="success",
+                )
+                for r in switch_records
+            ]
+        except Exception as exc:
+            self.log.error(f"Error executing {action} on {switch_ip}: {exc}")
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=action,
+                    status="failed", error=str(exc),
+                )
+                for r in switch_records
+            ]
+        finally:
+            conn.disconnect()
+
     def execute_toggle(
         self,
         actionable: list[DeviceRecord],
@@ -1375,7 +1431,7 @@ class OUIPortMapper:
     ) -> list[ActionResult]:
         """
         Execute a port toggle action on a pre-filtered list of records.
-        Returns a list of ActionResult for each switch group processed.
+        Processes switches concurrently for performance.
         """
         if action not in ("shutdown", "no shutdown"):
             self.log.error(f"Invalid action: {action}")
@@ -1385,73 +1441,19 @@ class OUIPortMapper:
             self.log.info("No actionable ports to toggle.")
             return []
 
-        results: list[ActionResult] = []
-
         # Group by switch IP for efficient SSH sessions
         by_switch: dict[str, list[DeviceRecord]] = {}
         for r in actionable:
             by_switch.setdefault(r.switch_ip, []).append(r)
 
-        for switch_ip, switch_records in by_switch.items():
-            platform_name = switch_records[0].platform or "cisco_ios"
-            platform = get_platform(platform_name)
-
-            conn, _ = self._connect(switch_ip, device_type=platform_name)
-            if not conn:
-                self.log.error(
-                    f"Cannot connect to {switch_ip} for port changes"
-                )
-                for r in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=action,
-                        status="failed",
-                        error=f"Cannot connect to {switch_ip}",
-                    ))
-                continue
-
-            try:
-                config_commands = []
-                for r in switch_records:
-                    if action == "shutdown":
-                        cmds = platform.get_shutdown_commands(r.interface)
-                    else:
-                        cmds = platform.get_no_shutdown_commands(r.interface)
-                    config_commands.extend(cmds)
-                    self.log.info(
-                        f"  {action}: {r.switch_hostname} {r.interface}"
-                    )
-
-                output = conn.send_config_set(config_commands)
-                self.log.debug(f"Config output:\n{output}")
-                self._maybe_save_config(conn, platform, switch_ip)
-
-                for r in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=action,
-                        status="success",
-                    ))
-
-            except Exception as exc:
-                self.log.error(
-                    f"Error executing {action} on {switch_ip}: {exc}"
-                )
-                for r in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=action,
-                        status="failed",
-                        error=str(exc),
-                    ))
-            finally:
-                conn.disconnect()
+        results: list[ActionResult] = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = {
+                pool.submit(self._toggle_one_switch, sw_ip, recs, action): sw_ip
+                for sw_ip, recs in by_switch.items()
+            }
+            for future in futures:
+                results.extend(future.result())
 
         self.log.info(
             f"{action.upper()} complete on {len(actionable)} port(s)."
@@ -1577,85 +1579,85 @@ class OUIPortMapper:
             skipped_no_tracked=skipped_no_tracked,
         )
 
+    def _vlan_assign_one_switch(
+        self,
+        switch_ip: str,
+        switch_records: list[tuple[DeviceRecord, str]],
+    ) -> list[ActionResult]:
+        """Assign VLANs on a single switch. Thread-safe."""
+        platform_name = switch_records[0][0].platform or "aruba_aoscx"
+        platform = get_platform(platform_name)
+
+        conn, _ = self._connect(switch_ip, device_type=platform_name)
+        if not conn:
+            self.log.error(f"Cannot connect to {switch_ip} for VLAN changes")
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=f"vlan {tv}",
+                    status="failed", error=f"Cannot connect to {switch_ip}",
+                )
+                for r, tv in switch_records
+            ]
+
+        try:
+            config_commands = []
+            for r, target_vlan in switch_records:
+                cmds = platform.get_vlan_assign_commands(r.interface, target_vlan)
+                config_commands.extend(cmds)
+                self.log.info(
+                    f"  VLAN assign: {r.switch_hostname} "
+                    f"{r.interface} → VLAN {target_vlan}"
+                )
+
+            output = conn.send_config_set(config_commands)
+            self.log.debug(f"Config output:\n{output}")
+            self._maybe_save_config(conn, platform, switch_ip)
+
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=f"vlan {tv}", status="success",
+                )
+                for r, tv in switch_records
+            ]
+        except Exception as exc:
+            self.log.error(f"Error executing VLAN assign on {switch_ip}: {exc}")
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=f"vlan {tv}",
+                    status="failed", error=str(exc),
+                )
+                for r, tv in switch_records
+            ]
+        finally:
+            conn.disconnect()
+
     def execute_vlan_assign(
         self,
         actionable: list[tuple[DeviceRecord, str]],
     ) -> list[ActionResult]:
         """
         Execute VLAN reassignment on a pre-filtered list of
-        (DeviceRecord, target_vlan) tuples.
+        (DeviceRecord, target_vlan) tuples. Processes switches concurrently.
         """
         if not actionable:
             self.log.info("No ports need VLAN reassignment.")
             return []
 
-        results: list[ActionResult] = []
-
-        # Group by switch IP for efficient SSH sessions
         by_switch: dict[str, list[tuple[DeviceRecord, str]]] = {}
         for r, target_vlan in actionable:
             by_switch.setdefault(r.switch_ip, []).append((r, target_vlan))
 
-        for switch_ip, switch_records in by_switch.items():
-            platform_name = switch_records[0][0].platform or "aruba_aoscx"
-            platform = get_platform(platform_name)
-
-            conn, _ = self._connect(switch_ip, device_type=platform_name)
-            if not conn:
-                self.log.error(
-                    f"Cannot connect to {switch_ip} for VLAN changes"
-                )
-                for r, target_vlan in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=f"vlan {target_vlan}",
-                        status="failed",
-                        error=f"Cannot connect to {switch_ip}",
-                    ))
-                continue
-
-            try:
-                config_commands = []
-                for r, target_vlan in switch_records:
-                    cmds = platform.get_vlan_assign_commands(
-                        r.interface, target_vlan
-                    )
-                    config_commands.extend(cmds)
-                    self.log.info(
-                        f"  VLAN assign: {r.switch_hostname} "
-                        f"{r.interface} → VLAN {target_vlan}"
-                    )
-
-                output = conn.send_config_set(config_commands)
-                self.log.debug(f"Config output:\n{output}")
-                self._maybe_save_config(conn, platform, switch_ip)
-
-                for r, target_vlan in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=f"vlan {target_vlan}",
-                        status="success",
-                    ))
-
-            except Exception as exc:
-                self.log.error(
-                    f"Error executing VLAN assign on {switch_ip}: {exc}"
-                )
-                for r, target_vlan in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=f"vlan {target_vlan}",
-                        status="failed",
-                        error=str(exc),
-                    ))
-            finally:
-                conn.disconnect()
+        results: list[ActionResult] = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = {
+                pool.submit(self._vlan_assign_one_switch, sw_ip, recs): sw_ip
+                for sw_ip, recs in by_switch.items()
+            }
+            for future in futures:
+                results.extend(future.result())
 
         self.log.info(
             f"VLAN REASSIGNMENT complete on {len(actionable)} port(s)."
@@ -1853,85 +1855,86 @@ class OUIPortMapper:
             skipped_bad_intf=skipped_bad_intf,
         )
 
+    def _set_descriptions_one_switch(
+        self,
+        switch_ip: str,
+        switch_records: list[tuple[DeviceRecord, str]],
+    ) -> list[ActionResult]:
+        """Set interface descriptions on a single switch. Thread-safe."""
+        platform_name = switch_records[0][0].platform or "cisco_ios"
+        platform = get_platform(platform_name)
+
+        conn, _ = self._connect(switch_ip, device_type=platform_name)
+        if not conn:
+            self.log.error(f"Cannot connect to {switch_ip} for description push")
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=f"description {desc}",
+                    status="failed", error=f"Cannot connect to {switch_ip}",
+                )
+                for r, desc in switch_records
+            ]
+
+        try:
+            config_commands = []
+            for r, desc in switch_records:
+                config_commands.append(f"interface {r.interface}")
+                config_commands.append(f"description {desc}")
+                self.log.info(
+                    f"  description: {r.switch_hostname} "
+                    f'{r.interface} → "{desc}"'
+                )
+
+            output = conn.send_config_set(config_commands)
+            self.log.debug(f"Config output:\n{output}")
+            self._maybe_save_config(conn, platform, switch_ip)
+
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=f"description {desc}",
+                    status="success",
+                )
+                for r, desc in switch_records
+            ]
+        except Exception as exc:
+            self.log.error(f"Error setting descriptions on {switch_ip}: {exc}")
+            return [
+                ActionResult(
+                    switch_hostname=r.switch_hostname, switch_ip=r.switch_ip,
+                    interface=r.interface, action=f"description {desc}",
+                    status="failed", error=str(exc),
+                )
+                for r, desc in switch_records
+            ]
+        finally:
+            conn.disconnect()
+
     def execute_set_descriptions(
         self,
         actionable: list[tuple[DeviceRecord, str]],
     ) -> list[ActionResult]:
         """
         Execute interface description updates on a pre-filtered list
-        of (DeviceRecord, description_string) tuples.
+        of (DeviceRecord, description_string) tuples. Processes switches concurrently.
         """
         if not actionable:
-            self.log.info(
-                "No actionable ports found for description update."
-            )
+            self.log.info("No actionable ports found for description update.")
             return []
 
-        results: list[ActionResult] = []
-
-        # Group by switch IP
         by_switch: dict[str, list[tuple[DeviceRecord, str]]] = {}
         for r, desc in actionable:
             by_switch.setdefault(r.switch_ip, []).append((r, desc))
 
-        for switch_ip, switch_records in by_switch.items():
-            platform_name = switch_records[0][0].platform or "cisco_ios"
-            platform = get_platform(platform_name)
-
-            conn, _ = self._connect(switch_ip, device_type=platform_name)
-            if not conn:
-                self.log.error(
-                    f"Cannot connect to {switch_ip} for description push"
-                )
-                for r, desc in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=f"description {desc}",
-                        status="failed",
-                        error=f"Cannot connect to {switch_ip}",
-                    ))
-                continue
-
-            try:
-                config_commands = []
-                for r, desc in switch_records:
-                    config_commands.append(f"interface {r.interface}")
-                    config_commands.append(f"description {desc}")
-                    self.log.info(
-                        f"  description: {r.switch_hostname} "
-                        f'{r.interface} → "{desc}"'
-                    )
-
-                output = conn.send_config_set(config_commands)
-                self.log.debug(f"Config output:\n{output}")
-                self._maybe_save_config(conn, platform, switch_ip)
-
-                for r, desc in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=f"description {desc}",
-                        status="success",
-                    ))
-
-            except Exception as exc:
-                self.log.error(
-                    f"Error setting descriptions on {switch_ip}: {exc}"
-                )
-                for r, desc in switch_records:
-                    results.append(ActionResult(
-                        switch_hostname=r.switch_hostname,
-                        switch_ip=r.switch_ip,
-                        interface=r.interface,
-                        action=f"description {desc}",
-                        status="failed",
-                        error=str(exc),
-                    ))
-            finally:
-                conn.disconnect()
+        results: list[ActionResult] = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = {
+                pool.submit(self._set_descriptions_one_switch, sw_ip, recs): sw_ip
+                for sw_ip, recs in by_switch.items()
+            }
+            for future in futures:
+                results.extend(future.result())
 
         self.log.info(
             f"DESCRIPTION SET complete on {len(actionable)} port(s)."

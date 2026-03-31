@@ -134,7 +134,7 @@ class ArubaAOSCXPlatform(SwitchPlatform):
         return "show vlan"
 
     def get_svi_config_command(self) -> str:
-        return "show running-config"
+        return "show running-config interface vlan"
 
     def get_spanning_tree_vlan_command(self) -> str:
         return "show spanning-tree"
@@ -175,10 +175,10 @@ class ArubaAOSCXPlatform(SwitchPlatform):
         Extracts: vsx-sync active-gateways, ip address, active-gateway ip mac,
         active-gateway ip, ip helper-address, ip igmp enable, ip pim-sparse enable
         """
-        # Split on "interface vlanN" headers
-        blocks = re.split(r'(?=^interface vlan\d+)', raw_output, flags=re.MULTILINE)
+        # Split on "interface vlan N" headers (AOS-CX uses a space before the ID)
+        blocks = re.split(r'(?=^interface vlan\s*\d+)', raw_output, flags=re.MULTILINE)
         for block in blocks:
-            header = re.match(r'interface vlan(\d+)', block)
+            header = re.match(r'interface vlan\s*(\d+)', block)
             if not header:
                 continue
             vlan_id = int(header.group(1))

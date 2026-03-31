@@ -4,20 +4,15 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from ..auth import User, authenticate_user, get_current_user, hash_password, verify_password
 from ..database import get_db
 from ..db_models import ChangeLog, ComplianceResult, DeviceResult, Job, OUIEntry, PortPolicy, Schedule, SwitchResult, ActionLog, Venue, VenuePort, VenueSwitch, VenueVlan
 from ..db_models import User as UserModel
-
-import json as _json
+from ..templates_env import templates
 
 router = APIRouter(tags=["pages"])
-
-templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
-templates.env.filters["fromjson"] = lambda s: _json.loads(s) if s else []
 
 
 def _render(request: Request, template: str, context: dict = None, status_code: int = 200):
@@ -497,8 +492,21 @@ def venue_compliance_page(
         raise HTTPException(status_code=404)
     results = db.query(ComplianceResult).filter(
         ComplianceResult.venue_id == venue_id,
-        ComplianceResult.job_id.is_(None),
+        ComplianceResult.job_id == f"venue-{venue_id}",
     ).all()
+
+    # Build port ID lookup for violations that can be remediated
+    switches = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue_id).all()
+    switch_id_map = {s.hostname: s.id for s in switches}
+    port_lookup: dict[tuple, int] = {}
+    for s in switches:
+        for p in s.ports:
+            port_lookup[(s.hostname, p.interface)] = p.id
+
+    # Enrich results with port_id for actionable violations
+    for r in results:
+        r._port_id = port_lookup.get((r.switch_hostname, r.interface))
+
     ok_count = sum(1 for r in results if r.severity == "ok")
     warn_count = sum(1 for r in results if r.severity == "warning")
     return _render(request, "venue_compliance.html", {
@@ -529,8 +537,13 @@ def settings_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    from ..app_settings import get_timezone, TIMEZONE_CHOICES
     users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "admin" else []
-    return _render(request, "settings.html", {"user": user, "users": users})
+    return _render(request, "settings.html", {
+        "user": user, "users": users,
+        "current_tz": get_timezone(db),
+        "timezone_choices": TIMEZONE_CHOICES,
+    })
 
 
 @router.post("/settings/change-password")
@@ -544,8 +557,9 @@ async def change_password(
     new_pw = form.get("new_password", "")
     confirm = form.get("confirm_password", "")
 
+    from ..app_settings import get_timezone, TIMEZONE_CHOICES
     users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "admin" else []
-    ctx = {"user": user, "users": users}
+    ctx = {"user": user, "users": users, "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES}
 
     if not verify_password(current, user.password_hash):
         return _render(request, "settings.html", {**ctx, "message": "Current password is incorrect.", "error": True})
@@ -575,8 +589,9 @@ async def create_user(
     password = form.get("password", "")
     role = form.get("role", "operator")
 
+    from ..app_settings import get_timezone, TIMEZONE_CHOICES
     users = db.query(UserModel).order_by(UserModel.username).all()
-    ctx = {"user": user, "users": users}
+    ctx = {"user": user, "users": users, "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES}
 
     if not username:
         return _render(request, "settings.html", {**ctx, "message": "Username is required.", "error": True})
@@ -596,7 +611,10 @@ async def create_user(
     db.commit()
 
     users = db.query(UserModel).order_by(UserModel.username).all()
-    return _render(request, "settings.html", {"user": user, "users": users, "message": f"User '{username}' created."})
+    return _render(request, "settings.html", {
+        "user": user, "users": users, "message": f"User '{username}' created.",
+        "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES,
+    })
 
 
 @router.post("/settings/delete-user/{user_id}")
@@ -618,4 +636,22 @@ def delete_user(
 
     db.delete(target)
     db.commit()
+    return RedirectResponse("/settings", status_code=303)
+
+
+@router.post("/settings/timezone")
+async def set_timezone_route(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    form = await request.form()
+    tz_name = form.get("timezone", "UTC").strip()
+
+    from ..app_settings import set_timezone
+    set_timezone(db, tz_name)
+
     return RedirectResponse("/settings", status_code=303)

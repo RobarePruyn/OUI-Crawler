@@ -13,7 +13,7 @@
             Old Run
             <select name="old_job_id" required>
                 {% for j in jobs %}
-                <option value="{{ j.id }}">{{ j.created_at.strftime('%Y-%m-%d %H:%M') }} &mdash; {{ j.core_ip }} ({{ j.devices_found }} devices)</option>
+                <option value="{{ j.id }}">{{ j.created_at | localtime }} &mdash; {{ j.core_ip }} ({{ j.devices_found }} devices)</option>
                 {% endfor %}
             </select>
         </label>
@@ -21,7 +21,7 @@
             New Run
             <select name="new_job_id" required>
                 {% for j in jobs %}
-                <option value="{{ j.id }}" {% if loop.first %}selected{% endif %}>{{ j.created_at.strftime('%Y-%m-%d %H:%M') }} &mdash; {{ j.core_ip }} ({{ j.devices_found }} devices)</option>
+                <option value="{{ j.id }}" {% if loop.first %}selected{% endif %}>{{ j.created_at | localtime }} &mdash; {{ j.core_ip }} ({{ j.devices_found }} devices)</option>
                 {% endfor %}
             </select>
         </label>

@@ -54,6 +54,21 @@ def _migrate(eng) -> None:
             if col not in venue_cols:
                 cursor.execute(f"ALTER TABLE venues ADD COLUMN {col} {col_type}")
         raw.commit()
+
+        # VenueVlan columns added after initial table creation
+        vlan_cols = [row[1] for row in cursor.execute("PRAGMA table_info(venue_vlans)").fetchall()]
+        for col, col_type in [
+            ("dark_vlan", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("igmp_enable", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("pim_sparse_enable", "BOOLEAN NOT NULL DEFAULT 0"),
+        ]:
+            if col not in vlan_cols:
+                cursor.execute(f"ALTER TABLE venue_vlans ADD COLUMN {col} {col_type}")
+        raw.commit()
+
+        # ActionLog.job_id and ComplianceResult.job_id made nullable
+        # (SQLite can't alter column nullability, but new rows work fine)
+
         cursor.close()
 
 

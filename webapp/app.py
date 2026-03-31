@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
         print(f"  Password: {password}")
         print(f"  Change this after first login!")
         print(f"{'='*50}\n")
+    from .app_settings import load_timezone
+    load_timezone(db)
+
     db.close()
 
     from .scheduler import init_scheduler, shutdown_scheduler

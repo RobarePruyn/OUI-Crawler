@@ -120,7 +120,7 @@ By default (`--platform auto`), the tool auto-detects each switch it connects to
 1. **netmiko SSHDetect** — fingerprints the device based on SSH banner and prompt behavior.
 2. **`show version` fingerprinting** — if SSHDetect is inconclusive, the tool connects, runs `show version`, and pattern-matches the output against known platform signatures.
 
-Auto-detection adds a few seconds per switch on the first connection. If your entire fabric is one platform, `--platform cisco_ios`, `--platform cisco_nxos`, or `--platform aruba_oscx` skips detection and is faster.
+Auto-detection adds a few seconds per switch on the first connection. If your entire fabric is one platform, `--platform cisco_ios`, `--platform cisco_nxos`, or `--platform aruba_aoscx` skips detection and is faster.
 
 ### Discovery Modes
 
@@ -244,7 +244,7 @@ python3 oui_port_mapper_v4.0.py \
   --core 10.1.1.1 \
   --user admin \
   --oui 00:1A:2B \
-  --platform aruba_oscx
+  --platform aruba_aoscx
 ```
 
 ### Multiple OUIs / OUIs from file
@@ -517,7 +517,7 @@ Useful for pre/post-event checks, tracking devices between site visits, or verif
 | `ip_address` | IP from ARP. "unknown" if no ARP entry found. |
 | `vlan` | VLAN the MAC was learned on. |
 | `matched_oui` | Which OUI prefix triggered the match (hex-only). |
-| `platform` | Detected platform of the switch (cisco_ios, cisco_nxos, aruba_oscx). |
+| `platform` | Detected platform of the switch (cisco_ios, cisco_nxos, aruba_aoscx). |
 | `discovery_depth` | Hop count from the starting switch (0 = starting switch). |
 | `notes` | Context flags. Empty = clean find, safe for port actions. |
 | `switch_tracked_vlan` | Active tracked VLAN(s) on this switch (from `--track-vlans`). Single value = the VLAN this IDF uses. |

@@ -3,7 +3,7 @@
 {% block title %}Compliance Report - OUI Port Mapper{% endblock %}
 {% block content %}
 <h1>Compliance Report</h1>
-<p>Job: <code>{{ job.id[:8] }}</code> &mdash; {{ job.core_ip }} &mdash; {{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else "" }}</p>
+<p>Job: <code>{{ job.id[:8] }}</code> &mdash; {{ job.core_ip }} &mdash; {{ job.created_at | localtime }}</p>
 
 <div class="grid">
     <article>

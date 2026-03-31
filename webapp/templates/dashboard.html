@@ -20,6 +20,11 @@
         <p>Diff two discovery runs to see new, missing, and moved devices.</p>
         <a href="/diff" role="button">Compare</a>
     </article>
+    <article>
+        <header>Venues</header>
+        <p>Manage venues, view network state, switches, and compliance.</p>
+        <a href="/venues" role="button">Venues</a>
+    </article>
 </div>
 
 <h2>Recent Jobs</h2>
@@ -55,7 +60,7 @@
             <td>{{ job.core_ip or "-" }}</td>
             <td>{{ job.switches_visited }}</td>
             <td>{{ job.devices_found }}</td>
-            <td>{{ job.created_at.strftime('%Y-%m-%d %H:%M') if job.created_at else "-" }}</td>
+            <td>{{ job.created_at | localtime }}</td>
             <td>
                 <a href="/jobs/{{ job.id }}">View</a>
                 {% if job.job_type == "discovery" and job.status == "completed" %}

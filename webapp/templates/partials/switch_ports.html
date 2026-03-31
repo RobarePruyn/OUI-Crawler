@@ -20,7 +20,7 @@
             <td>{{ p.ip_address or "-" }}</td>
             <td id="port-vlan-{{ p.id }}">{{ p.vlan or "-" }}</td>
             <td>{% if p.matched_oui %}<code>{{ p.matched_oui }}</code>{% else %}-{% endif %}</td>
-            <td><small>{{ p.last_seen_at.strftime('%Y-%m-%d %H:%M') if p.last_seen_at else "-" }}</small></td>
+            <td><small>{{ p.last_seen_at | localtime }}</small></td>
             <td>{% if p.notes %}<small style="color:var(--pico-muted-color);">{{ p.notes }}</small>{% else %}-{% endif %}</td>
             <td style="white-space:nowrap;">
                 <div style="display:flex;gap:0.25rem;align-items:center;flex-wrap:wrap;">

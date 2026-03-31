@@ -129,9 +129,7 @@ def run_schedule_now(
 # ── Helper ──────────────────────────────────────────────────────────
 
 def _render_schedules_partial(request: Request, db: Session, venue: Venue) -> HTMLResponse:
-    from pathlib import Path
-    from fastapi.templating import Jinja2Templates
+    from ..templates_env import templates
 
-    templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
     schedules = db.query(Schedule).filter(Schedule.venue_id == venue.id).all()
     return templates.TemplateResponse(request, "partials/schedules.html", {"venue": venue, "schedules": schedules})

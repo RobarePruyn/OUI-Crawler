@@ -3,11 +3,9 @@
 import logging
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from netmiko import ConnectHandler
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -18,16 +16,14 @@ from ..changelog import log_changes
 from ..crypto import decrypt_credential
 from ..database import get_db
 from ..db_models import ActionLog, ChangeLog, Venue, VenuePort, VenueSwitch
+from ..templates_env import templates
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["switches"])
 
-_templates_dir = str(Path(__file__).parent.parent / "templates")
-
 
 def _render_switches_partial(request: Request, db: Session, venue: Venue) -> HTMLResponse:
-    templates = Jinja2Templates(directory=_templates_dir)
     switches = (
         db.query(VenueSwitch)
         .filter(VenueSwitch.venue_id == venue.id)
@@ -151,7 +147,7 @@ def port_action(
 
         # Log to ActionLog
         db.add(ActionLog(
-            job_id=None,
+            job_id=f"venue-{venue_id}",
             action_type=req.action,
             switch_hostname=switch.hostname,
             switch_ip=switch.mgmt_ip,
@@ -186,7 +182,7 @@ def port_action(
         logger.error("Port action failed: %s", exc)
 
         db.add(ActionLog(
-            job_id=None,
+            job_id=f"venue-{venue_id}",
             action_type=req.action,
             switch_hostname=switch.hostname,
             switch_ip=switch.mgmt_ip,

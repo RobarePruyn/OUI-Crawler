@@ -1,25 +1,20 @@
 """Venue VLAN CRUD API routes (HTMX partial pattern)."""
 
 import json
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from ..auth import User, get_current_user
 from ..database import get_db
 from ..db_models import Venue, VenueVlan
+from ..templates_env import templates
 
 router = APIRouter(tags=["vlans"])
 
-_templates_dir = str(Path(__file__).parent.parent / "templates")
-
 
 def _render_vlan_partial(request: Request, db: Session, venue: Venue) -> HTMLResponse:
-    templates = Jinja2Templates(directory=_templates_dir)
-    templates.env.filters["fromjson"] = lambda s: json.loads(s) if s else []
     vlans = (
         db.query(VenueVlan)
         .filter(VenueVlan.venue_id == venue.id)

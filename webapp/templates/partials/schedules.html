@@ -29,7 +29,7 @@
             </td>
             <td>
                 {% if s.last_run_at %}
-                {{ s.last_run_at.strftime('%Y-%m-%d %H:%M') }}
+                {{ s.last_run_at | localtime }}
                 {% if s.last_job_id %}
                 <a href="/jobs/{{ s.last_job_id }}">(view)</a>
                 {% endif %}

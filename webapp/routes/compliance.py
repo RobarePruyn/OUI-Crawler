@@ -118,9 +118,7 @@ def _build_summary(results) -> ComplianceSummary:
 
 
 def _render_policies_partial(request: Request, db: Session, venue: Venue) -> HTMLResponse:
-    from pathlib import Path
-    from fastapi.templating import Jinja2Templates
+    from ..templates_env import templates
 
-    templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
     policies = db.query(PortPolicy).filter(PortPolicy.venue_id == venue.id).all()
     return templates.TemplateResponse(request, "partials/port_policies.html", {"venue": venue, "policies": policies})

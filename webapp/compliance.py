@@ -3,6 +3,7 @@
 import ipaddress
 import json
 import logging
+import re
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -10,6 +11,12 @@ from sqlalchemy.orm import Session
 from .db_models import ComplianceResult, DeviceResult, OUIEntry, PortPolicy, Venue, VenuePort, VenueSwitch
 
 logger = logging.getLogger(__name__)
+
+# Interfaces that are infrastructure (trunks/uplinks) — never flag in compliance
+_INFRA_INTERFACE_RE = re.compile(
+    r'^(lag\d|port-channel\d|po\d|ae\d|bond\d)',
+    re.IGNORECASE,
+)
 
 
 # ── VLAN/subnet pair data structure ─────────────────────────────────
@@ -38,10 +45,14 @@ class VlanSubnetPair:
 
 
 def _build_oui_map(oui_entries: list[OUIEntry]) -> dict[str, list[VlanSubnetPair]]:
-    """Build a lookup from normalized OUI prefix to paired VLAN/subnet list."""
+    """Build a lookup from normalized OUI prefix to paired VLAN/subnet list.
+
+    Keys are full-length normalized prefixes (e.g. "E43022B8" for e4:30:22:b8).
+    Use _match_oui() for longest-prefix lookup.
+    """
     oui_map: dict[str, list[VlanSubnetPair]] = {}
     for entry in oui_entries:
-        prefix = (entry.oui_prefix or "").replace(":", "").replace("-", "").replace(".", "").upper()[:6]
+        prefix = (entry.oui_prefix or "").replace(":", "").replace("-", "").replace(".", "").upper()
         if not prefix or not entry.candidate_vlans:
             continue
         try:
@@ -68,6 +79,17 @@ def _build_oui_map(oui_entries: list[OUIEntry]) -> dict[str, list[VlanSubnetPair
     return oui_map
 
 
+def _match_oui(mac: str, oui_map: dict[str, list[VlanSubnetPair]]) -> Optional[list[VlanSubnetPair]]:
+    """Longest-prefix match of a MAC against the OUI map."""
+    normalized = mac.replace(":", "").replace("-", "").replace(".", "").upper()
+    # Try longest prefix first (e.g. 8 chars before 6)
+    for length in sorted({len(k) for k in oui_map}, reverse=True):
+        candidate = normalized[:length]
+        if candidate in oui_map:
+            return oui_map[candidate]
+    return None
+
+
 def check_vlan_compliance(db: Session, job_id: str, venue_id: int) -> list[ComplianceResult]:
     """Compare discovered device VLANs and IPs against venue OUI registry expectations.
 
@@ -92,11 +114,12 @@ def check_vlan_compliance(db: Session, job_id: str, venue_id: int) -> list[Compl
 
     results = []
     for dev in devices:
-        matched = (dev.matched_oui or "").replace(":", "").replace("-", "").replace(".", "").upper()[:6]
-        if matched not in oui_map:
+        # Skip infrastructure interfaces (LAGs, port-channels, etc.)
+        if _INFRA_INTERFACE_RE.match(dev.interface or ""):
             continue
-
-        pairs = oui_map[matched]
+        pairs = _match_oui(dev.matched_oui or "", oui_map)
+        if not pairs:
+            continue
         device_vlan = (dev.vlan or "").strip()
         device_ip = (dev.ip_address or "").strip()
         valid_vlans = [p.vlan for p in pairs]
@@ -219,20 +242,23 @@ def check_venue_compliance(db: Session, venue_id: int) -> list[ComplianceResult]
     if not ports:
         return []
 
-    # Clear existing venue-level compliance (job_id is NULL)
+    # Clear existing venue-level compliance (sentinel job_id)
+    VENUE_SENTINEL = f"venue-{venue_id}"
     db.query(ComplianceResult).filter(
         ComplianceResult.venue_id == venue_id,
-        ComplianceResult.job_id.is_(None),
+        ComplianceResult.job_id == VENUE_SENTINEL,
     ).delete()
 
     results = []
     for port in ports:
-        matched = (port.matched_oui or "").replace(":", "").replace("-", "").replace(".", "").upper()[:6]
-        if matched not in oui_map:
+        # Skip infrastructure interfaces (LAGs, port-channels, etc.)
+        if _INFRA_INTERFACE_RE.match(port.interface or ""):
+            continue
+        pairs = _match_oui(port.matched_oui or "", oui_map)
+        if not pairs:
             continue
 
         switch = switch_map.get(port.switch_id)
-        pairs = oui_map[matched]
         device_vlan = (port.vlan or "").strip()
         device_ip = (port.ip_address or "").strip()
         valid_vlans = [p.vlan for p in pairs]
@@ -262,7 +288,7 @@ def check_venue_compliance(db: Session, venue_id: int) -> list[ComplianceResult]
             expected = suggested.vlan
 
         cr = ComplianceResult(
-            job_id=None,
+            job_id=VENUE_SENTINEL,
             venue_id=venue_id,
             check_type="vlan_compliance",
             switch_hostname=switch.hostname if switch else "",

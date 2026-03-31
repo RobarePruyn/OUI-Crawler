@@ -28,10 +28,19 @@
 {% set violations = results | selectattr("severity", "ne", "ok") | list %}
 {% if violations %}
 <h2>Violations ({{ violations | length }})</h2>
+
+<div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">
+    <button class="outline" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="selectAll(true)">Select All</button>
+    <button class="outline secondary" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="selectAll(false)">Select None</button>
+    <button id="btn-push" style="width:auto;" onclick="pushSelected()">Push Selected</button>
+    <span id="push-status" style="font-size:0.85rem;"></span>
+</div>
+
 <figure>
 <table>
     <thead>
         <tr>
+            <th style="width:2rem;"><input type="checkbox" id="chk-all" onchange="selectAll(this.checked)"></th>
             <th>Switch</th>
             <th>Interface</th>
             <th>MAC</th>
@@ -43,6 +52,14 @@
     <tbody>
         {% for r in violations %}
         <tr>
+            <td>
+                {% if r._port_id and r.expected_value %}
+                <input type="checkbox" class="violation-chk"
+                       data-port-id="{{ r._port_id }}"
+                       data-vlan="{{ r.expected_value }}"
+                       data-label="{{ r.switch_hostname }}:{{ r.interface }}">
+                {% endif %}
+            </td>
             <td>{{ r.switch_hostname or r.switch_ip }}</td>
             <td>{{ r.interface }}</td>
             <td><code>{{ r.mac_address }}</code></td>
@@ -94,6 +111,59 @@ function runCheck() {
         .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
         .then(() => { location.reload(); })
         .catch(err => { alert('Error: ' + err.message); });
+}
+
+function selectAll(checked) {
+    document.querySelectorAll('.violation-chk').forEach(cb => { cb.checked = checked; });
+    const chkAll = document.getElementById('chk-all');
+    if (chkAll) chkAll.checked = checked;
+}
+
+async function pushSelected() {
+    const checks = document.querySelectorAll('.violation-chk:checked');
+    if (!checks.length) { alert('No violations selected.'); return; }
+
+    const count = checks.length;
+    if (!confirm('Push VLAN changes to ' + count + ' port(s)?')) return;
+
+    const btn = document.getElementById('btn-push');
+    const status = document.getElementById('push-status');
+    btn.setAttribute('aria-busy', 'true');
+    btn.disabled = true;
+    status.textContent = '';
+
+    let ok = 0, fail = 0;
+    for (const cb of checks) {
+        const portId = cb.dataset.portId;
+        const vlan = cb.dataset.vlan;
+        const label = cb.dataset.label;
+        try {
+            const r = await fetch('/api/venues/{{ venue.id }}/ports/' + portId + '/action', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'vlan_assign', vlan: vlan}),
+            });
+            const data = await r.json();
+            if (data.status === 'ok') {
+                ok++;
+                cb.closest('tr').style.opacity = '0.4';
+                cb.checked = false;
+                cb.disabled = true;
+            } else {
+                fail++;
+                console.error(label + ': ' + data.message);
+            }
+        } catch (err) {
+            fail++;
+            console.error(label + ': ' + err.message);
+        }
+        status.textContent = ok + ' done, ' + fail + ' failed / ' + count + ' total';
+    }
+
+    btn.removeAttribute('aria-busy');
+    btn.disabled = false;
+    status.style.color = fail ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
+    status.textContent = ok + ' pushed' + (fail ? ', ' + fail + ' failed' : '') + '. Re-run compliance to refresh.';
 }
 </script>
 

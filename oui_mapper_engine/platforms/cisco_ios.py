@@ -407,15 +407,17 @@ class CiscoIOSPlatform(SwitchPlatform):
           1      Po1(SU)       LACP        Gi1/0/49(P)  Gi1/0/50(P)
           2      Po2(SU)       LACP        Te1/0/1(P)   Te1/0/2(P)
 
+        Members may wrap to continuation lines (indented, no group number):
+          3      Po3(SU)       LACP        Gi1/0/1(P)   Gi1/0/2(P)
+                                            Gi1/0/3(P)   Gi1/0/4(P)
+
         Parenthetical flags: (P)=bundled, (s)=suspended, (D)=down, etc.
         We capture all members regardless of state — CDP/LLDP may still
         be running on suspended or down members.
         """
         channel_to_members: dict[str, list[str]] = {}
 
-        # Match lines with a port-channel and member ports
-        # Group number, Po<n>(flags), protocol, then member ports
-        line_pattern = re.compile(
+        header_pattern = re.compile(
             r'^\s*\d+\s+'                # Group number
             r'(Po\d+)\(\S+\)\s+'         # Port-channel name with flags
             r'\S+\s+'                     # Protocol (LACP, PAgP, etc.)
@@ -423,23 +425,36 @@ class CiscoIOSPlatform(SwitchPlatform):
             re.MULTILINE
         )
 
-        for match in line_pattern.finditer(raw_output):
-            po_name_abbrev = match.group(1)          # e.g., "Po1"
-            members_raw = match.group(2)             # e.g., "Gi1/0/49(P)  Gi1/0/50(P)"
+        member_pattern = re.compile(r'(\S+?)\(\S+\)')
+        lines = raw_output.splitlines()
+        current_po_abbrev = None
+        current_members: list[str] = []
 
-            # Normalize port-channel name
-            po_name = self.normalize_interface(po_name_abbrev)
+        for line in lines:
+            header = header_pattern.match(line)
+            if header:
+                # Save previous port-channel if any
+                if current_po_abbrev and current_members:
+                    po_name = self.normalize_interface(current_po_abbrev)
+                    channel_to_members[po_name] = current_members
+                    channel_to_members[current_po_abbrev] = current_members
 
-            # Extract each member interface, stripping the (flags)
-            member_pattern = re.compile(r'(\S+?)\(\S+\)')
-            members = []
-            for member_match in member_pattern.finditer(members_raw):
-                member_intf = self.normalize_interface(member_match.group(1))
-                members.append(member_intf)
+                current_po_abbrev = header.group(1)
+                members_raw = header.group(2)
+                current_members = [
+                    self.normalize_interface(m.group(1))
+                    for m in member_pattern.finditer(members_raw)
+                ]
+            elif current_po_abbrev and member_pattern.search(line):
+                # Continuation line — more members for the current port-channel
+                if re.match(r'^\s+\S+\(\S+\)', line):
+                    for m in member_pattern.finditer(line):
+                        current_members.append(self.normalize_interface(m.group(1)))
 
-            if members:
-                channel_to_members[po_name] = members
-                # Also store under abbreviated name for fallback matching
-                channel_to_members[po_name_abbrev] = members
+        # Save last port-channel
+        if current_po_abbrev and current_members:
+            po_name = self.normalize_interface(current_po_abbrev)
+            channel_to_members[po_name] = current_members
+            channel_to_members[current_po_abbrev] = current_members
 
         return channel_to_members

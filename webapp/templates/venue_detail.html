@@ -10,50 +10,51 @@
 </article>
 {% endif %}
 
-<form id="venue-form" method="post" action="/venues{% if venue %}/{{ venue.id }}{% endif %}">
+{% if not venue %}
+{# ── New venue: show form only ── #}
+<form id="venue-form" method="post" action="/venues">
     <div class="form-section">
         <h3>Connection</h3>
         <div class="grid">
             <label class="required">
                 Venue Name
-                <input type="text" name="name" value="{{ venue.name if venue else '' }}" required>
+                <input type="text" name="name" required>
             </label>
             <label class="required">
                 Core Switch IP
-                <input type="text" name="core_ip" value="{{ venue.core_ip if venue else '' }}" placeholder="10.1.1.1" required>
+                <input type="text" name="core_ip" placeholder="10.1.1.1" required>
             </label>
         </div>
         <div class="grid">
             <label>
                 Platform
                 <select name="platform">
-                    <option value="auto" {{ 'selected' if not venue or venue.platform == 'auto' }}>Auto-detect</option>
-                    <option value="cisco_ios" {{ 'selected' if venue and venue.platform == 'cisco_ios' }}>Cisco IOS / IOS-XE</option>
-                    <option value="cisco_nxos" {{ 'selected' if venue and venue.platform == 'cisco_nxos' }}>Cisco NX-OS</option>
-                    <option value="aruba_aoscx" {{ 'selected' if venue and venue.platform == 'aruba_aoscx' }}>Aruba AOS-CX</option>
+                    <option value="auto" selected>Auto-detect</option>
+                    <option value="cisco_ios">Cisco IOS / IOS-XE</option>
+                    <option value="cisco_nxos">Cisco NX-OS</option>
+                    <option value="aruba_aoscx">Aruba AOS-CX</option>
                 </select>
             </label>
             <label class="required">
                 Management Subnet
-                <input type="text" name="mgmt_subnet" value="{{ venue.mgmt_subnet or '' }}" placeholder="10.10.0.0/24" required>
+                <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24" required>
                 <small class="field-help">Restrict neighbor recursion to this subnet</small>
             </label>
         </div>
         <div class="grid">
             <label class="required">
                 SSH Username
-                <input type="text" name="ssh_username" value="{{ venue.ssh_username if venue else '' }}" required autocomplete="username">
+                <input type="text" name="ssh_username" required autocomplete="username">
             </label>
             <label class="required">
                 SSH Password
-                <input type="password" name="ssh_password" {% if not venue %}required{% endif %} autocomplete="new-password" placeholder="{{ '(unchanged)' if venue else '' }}">
-                {% if venue %}<small class="field-help">Leave blank to keep current password</small>{% endif %}
+                <input type="password" name="ssh_password" required autocomplete="new-password">
             </label>
         </div>
         <label>
             Enable Secret
-            <input type="password" name="enable_secret" autocomplete="off" placeholder="{{ '(unchanged)' if venue else '' }}">
-            <small class="field-help">Only needed if switches require enable mode. Leave blank to keep current{% if not venue %} or default to SSH password{% endif %}.</small>
+            <input type="password" name="enable_secret" autocomplete="off">
+            <small class="field-help">Only needed if switches require enable mode</small>
         </label>
     </div>
 
@@ -61,7 +62,7 @@
         <h3>Options</h3>
         <div class="checkbox-row">
             <label>
-                <input type="checkbox" name="fan_out" value="true" {{ 'checked' if venue and venue.fan_out }}>
+                <input type="checkbox" name="fan_out" value="true">
                 Fan-out mode
             </label>
             <span class="field-help">Visit all neighbors, not just those with matching MACs</span>
@@ -73,12 +74,12 @@
         <div class="grid" style="margin-top:0.75rem;">
             <label>
                 Workers
-                <input type="number" name="workers" value="{{ venue.workers if venue else 10 }}" min="1" max="50">
+                <input type="number" name="workers" value="10" min="1" max="50">
                 <small class="field-help">Parallel SSH sessions</small>
             </label>
             <label>
                 MAC Threshold
-                <input type="number" name="mac_threshold" value="{{ venue.mac_threshold if venue else 1 }}" min="1" max="10">
+                <input type="number" name="mac_threshold" value="1" min="1" max="10">
                 <small class="field-help">Ports with this many or fewer MACs are treated as access ports</small>
             </label>
         </div>
@@ -86,78 +87,48 @@
         <div class="grid">
             <label>
                 Default DHCP Servers
-                <input type="text" name="default_dhcp_servers" value="{% if venue and venue.default_dhcp_servers %}{{ venue.default_dhcp_servers | fromjson | join(', ') }}{% endif %}" placeholder="10.1.1.10, 10.1.1.11">
+                <input type="text" name="default_dhcp_servers" placeholder="10.1.1.10, 10.1.1.11">
                 <small class="field-help">Comma-separated. Applied to new VLANs.</small>
             </label>
             <label>
                 Default DNS Servers
-                <input type="text" name="default_dns_servers" value="{% if venue and venue.default_dns_servers %}{{ venue.default_dns_servers | fromjson | join(', ') }}{% endif %}" placeholder="10.1.1.10">
+                <input type="text" name="default_dns_servers" placeholder="10.1.1.10">
                 <small class="field-help">Comma-separated. Applied to new VLANs.</small>
             </label>
         </div>
         <label>
             Default Gateway MAC (Aruba)
-            <input type="text" name="default_gateway_mac" value="{{ venue.default_gateway_mac or '' }}" placeholder="00:00:5e:00:01:01">
+            <input type="text" name="default_gateway_mac" placeholder="00:00:5e:00:01:01">
             <small class="field-help">Aruba active-gateway MAC for new SVIs</small>
         </label>
     </details>
 
-    <div style="display:flex;gap:0.5rem;align-items:center;">
-        <button type="submit" class="btn-primary">{{ "Update Venue" if venue else "Create Venue" }}</button>
-        {% if venue %}
-        <button type="button" id="btn-test" class="outline" onclick="testConnection()">Test Connection</button>
-        <span id="test-result" style="font-size:0.85rem;"></span>
-        {% endif %}
-    </div>
+    <button type="submit" class="btn-primary">Create Venue</button>
 </form>
+{% else %}
 
-{% if venue %}
-<hr>
+{# ── Action bar ── #}
+<div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
+    <button class="outline" onclick="venueDiscover()">Run Discovery</button>
+    <button class="outline secondary" onclick="venueInventory()">Run Inventory</button>
+    <a href="/venues/{{ venue.id }}/compliance" class="outline secondary" role="button" style="width:auto;">Compliance</a>
+</div>
+<div id="venue-action-result"></div>
 
-<!-- Tabs -->
+{# ── Tabs ── #}
 <nav>
     <ul>
-        <li><a href="#" class="tab-link active" data-tab="tab-oui">OUI Registry</a></li>
-        <li><a href="#" class="tab-link" data-tab="tab-schedules">Schedules</a></li>
-        <li><a href="#" class="tab-link" data-tab="tab-policies">Port Policies</a></li>
-        <li><a href="#" class="tab-link" data-tab="tab-switches">Switches</a></li>
-        <li><a href="#" class="tab-link" data-tab="tab-vlans">VLANs</a></li>
+        <li><a href="#" class="tab-link active" data-tab="tab-switches">Switches</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-timeline">Timeline</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-schedules">Schedules</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-vlans">VLANs</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-oui">OUI Registry</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-policies">Port Policies</a></li>
     </ul>
 </nav>
 
-<!-- OUI Registry Tab -->
-<div id="tab-oui" class="tab-panel">
-    <div id="oui-registry"
-         hx-get="/partials/oui-registry/{{ venue.id }}"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <article aria-busy="true">Loading OUI entries...</article>
-    </div>
-</div>
-
-<!-- Schedules Tab -->
-<div id="tab-schedules" class="tab-panel" style="display:none;">
-    <div id="schedules"
-         hx-get="/partials/schedules/{{ venue.id }}"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <article aria-busy="true">Loading schedules...</article>
-    </div>
-</div>
-
-<!-- Port Policies Tab -->
-<div id="tab-policies" class="tab-panel" style="display:none;">
-    <div id="port-policies"
-         hx-get="/partials/port-policies/{{ venue.id }}"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <article aria-busy="true">Loading port policies...</article>
-    </div>
-</div>
-
-<!-- Switches Tab -->
-<div id="tab-switches" class="tab-panel" style="display:none;">
+<!-- Switches Tab (default) -->
+<div id="tab-switches" class="tab-panel">
     <div id="venue-switches"
          hx-get="/partials/switches/{{ venue.id }}"
          hx-trigger="load"
@@ -166,43 +137,160 @@
     </div>
 </div>
 
-<!-- VLANs Tab -->
-<div id="tab-vlans" class="tab-panel" style="display:none;">
-    <div id="venue-vlans"
-         hx-get="/partials/vlans/{{ venue.id }}"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <article aria-busy="true">Loading VLANs...</article>
-    </div>
-</div>
-
 <!-- Timeline Tab -->
 <div id="tab-timeline" class="tab-panel" style="display:none;">
-    <div id="venue-timeline"
-         hx-get="/partials/timeline/{{ venue.id }}"
-         hx-trigger="load"
-         hx-swap="innerHTML">
+    <div id="venue-timeline" data-src="/partials/timeline/{{ venue.id }}">
         <article aria-busy="true">Loading timeline...</article>
     </div>
 </div>
 
-<hr>
-<div style="display:flex;gap:0.5rem;">
-    <button class="outline" onclick="venueDiscover()">Run Discovery</button>
-    <button class="outline secondary" onclick="venueInventory()">Run Inventory</button>
-    <a href="/venues/{{ venue.id }}/compliance" class="outline secondary" role="button" style="width:auto;">Compliance</a>
+<!-- Schedules Tab -->
+<div id="tab-schedules" class="tab-panel" style="display:none;">
+    <div id="schedules" data-src="/partials/schedules/{{ venue.id }}">
+        <article aria-busy="true">Loading schedules...</article>
+    </div>
 </div>
-<div id="venue-action-result"></div>
+
+<!-- VLANs Tab -->
+<div id="tab-vlans" class="tab-panel" style="display:none;">
+    <div id="venue-vlans" data-src="/partials/vlans/{{ venue.id }}">
+        <article aria-busy="true">Loading VLANs...</article>
+    </div>
+</div>
+
+<!-- OUI Registry Tab -->
+<div id="tab-oui" class="tab-panel" style="display:none;">
+    <div id="oui-registry" data-src="/partials/oui-registry/{{ venue.id }}">
+        <article aria-busy="true">Loading OUI entries...</article>
+    </div>
+</div>
+
+<!-- Port Policies Tab -->
+<div id="tab-policies" class="tab-panel" style="display:none;">
+    <div id="port-policies" data-src="/partials/port-policies/{{ venue.id }}">
+        <article aria-busy="true">Loading port policies...</article>
+    </div>
+</div>
+
+{# ── Venue Configuration (collapsed) ── #}
+<hr>
+<details class="form-section">
+    <summary><h3 style="display:inline;cursor:pointer;">Venue Configuration</h3></summary>
+    <form id="venue-form" method="post" action="/venues/{{ venue.id }}" style="margin-top:0.75rem;">
+        <div class="form-section">
+            <h3>Connection</h3>
+            <div class="grid">
+                <label class="required">
+                    Venue Name
+                    <input type="text" name="name" value="{{ venue.name }}" required>
+                </label>
+                <label class="required">
+                    Core Switch IP
+                    <input type="text" name="core_ip" value="{{ venue.core_ip }}" placeholder="10.1.1.1" required>
+                </label>
+            </div>
+            <div class="grid">
+                <label>
+                    Platform
+                    <select name="platform">
+                        <option value="auto" {{ 'selected' if venue.platform == 'auto' }}>Auto-detect</option>
+                        <option value="cisco_ios" {{ 'selected' if venue.platform == 'cisco_ios' }}>Cisco IOS / IOS-XE</option>
+                        <option value="cisco_nxos" {{ 'selected' if venue.platform == 'cisco_nxos' }}>Cisco NX-OS</option>
+                        <option value="aruba_aoscx" {{ 'selected' if venue.platform == 'aruba_aoscx' }}>Aruba AOS-CX</option>
+                    </select>
+                </label>
+                <label class="required">
+                    Management Subnet
+                    <input type="text" name="mgmt_subnet" value="{{ venue.mgmt_subnet or '' }}" placeholder="10.10.0.0/24" required>
+                    <small class="field-help">Restrict neighbor recursion to this subnet</small>
+                </label>
+            </div>
+            <div class="grid">
+                <label class="required">
+                    SSH Username
+                    <input type="text" name="ssh_username" value="{{ venue.ssh_username }}" required autocomplete="username">
+                </label>
+                <label class="required">
+                    SSH Password
+                    <input type="password" name="ssh_password" autocomplete="new-password" placeholder="(unchanged)">
+                    <small class="field-help">Leave blank to keep current password</small>
+                </label>
+            </div>
+            <label>
+                Enable Secret
+                <input type="password" name="enable_secret" autocomplete="off" placeholder="(unchanged)">
+                <small class="field-help">Only needed if switches require enable mode. Leave blank to keep current.</small>
+            </label>
+        </div>
+
+        <div class="form-section">
+            <h3>Options</h3>
+            <div class="checkbox-row">
+                <label>
+                    <input type="checkbox" name="fan_out" value="true" {{ 'checked' if venue.fan_out }}>
+                    Fan-out mode
+                </label>
+                <span class="field-help">Visit all neighbors, not just those with matching MACs</span>
+            </div>
+        </div>
+
+        <details class="form-section">
+            <summary><h3 style="display:inline;cursor:pointer;">Advanced Settings</h3></summary>
+            <div class="grid" style="margin-top:0.75rem;">
+                <label>
+                    Workers
+                    <input type="number" name="workers" value="{{ venue.workers }}" min="1" max="50">
+                    <small class="field-help">Parallel SSH sessions</small>
+                </label>
+                <label>
+                    MAC Threshold
+                    <input type="number" name="mac_threshold" value="{{ venue.mac_threshold }}" min="1" max="10">
+                    <small class="field-help">Ports with this many or fewer MACs are treated as access ports</small>
+                </label>
+            </div>
+            <h4 style="margin-top:1rem;">Default SVI Settings</h4>
+            <div class="grid">
+                <label>
+                    Default DHCP Servers
+                    <input type="text" name="default_dhcp_servers" value="{% if venue.default_dhcp_servers %}{{ venue.default_dhcp_servers | fromjson | join(', ') }}{% endif %}" placeholder="10.1.1.10, 10.1.1.11">
+                    <small class="field-help">Comma-separated. Applied to new VLANs.</small>
+                </label>
+                <label>
+                    Default DNS Servers
+                    <input type="text" name="default_dns_servers" value="{% if venue.default_dns_servers %}{{ venue.default_dns_servers | fromjson | join(', ') }}{% endif %}" placeholder="10.1.1.10">
+                    <small class="field-help">Comma-separated. Applied to new VLANs.</small>
+                </label>
+            </div>
+            <label>
+                Default Gateway MAC (Aruba)
+                <input type="text" name="default_gateway_mac" value="{{ venue.default_gateway_mac or '' }}" placeholder="00:00:5e:00:01:01">
+                <small class="field-help">Aruba active-gateway MAC for new SVIs</small>
+            </label>
+        </details>
+
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+            <button type="submit" class="btn-primary">Update Venue</button>
+            <button type="button" id="btn-test" class="outline" onclick="testConnection()">Test Connection</button>
+            <span id="test-result" style="font-size:0.85rem;"></span>
+        </div>
+    </form>
+</details>
 
 <script>
-// Tab switching
+// Tab switching — lazy-load content on first view via htmx.ajax
 document.querySelectorAll('.tab-link').forEach(link => {
     link.addEventListener('click', function(e) {
         e.preventDefault();
         document.querySelectorAll('.tab-link').forEach(l => l.classList.remove('active'));
         document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
         this.classList.add('active');
-        document.getElementById(this.dataset.tab).style.display = '';
+        const panel = document.getElementById(this.dataset.tab);
+        panel.style.display = '';
+        const lazy = panel.querySelector('[data-src]');
+        if (lazy) {
+            htmx.ajax('GET', lazy.dataset.src, {target: '#' + lazy.id, swap: 'innerHTML'});
+            delete lazy.dataset.src;
+        }
     });
 });
 

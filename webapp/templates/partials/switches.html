@@ -41,7 +41,7 @@
                 {% else %}-{% endif %}
             </td>
             <td>{{ s.ports | length }}</td>
-            <td><small>{{ s.last_seen_at.strftime('%Y-%m-%d %H:%M') if s.last_seen_at else "-" }}</small></td>
+            <td><small>{{ s.last_seen_at | localtime }}</small></td>
             <td>{{ s.source }}</td>
             <td style="white-space:nowrap;">
                 <form hx-delete="/api/venues/{{ venue.id }}/switches/{{ s.id }}"

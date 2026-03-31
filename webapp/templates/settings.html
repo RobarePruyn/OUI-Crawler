@@ -4,6 +4,26 @@
 {% block content %}
 <h1>Settings</h1>
 
+{% if user.role == "admin" %}
+<h2>Application</h2>
+<form method="post" action="/settings/timezone">
+    <div class="grid">
+        <label>
+            Timezone
+            <select name="timezone">
+                {% for tz in timezone_choices %}
+                <option value="{{ tz }}" {{ 'selected' if tz == current_tz }}>{{ tz }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label style="align-self:end;">
+            <button type="submit" style="width:auto;">Save Timezone</button>
+        </label>
+    </div>
+</form>
+<hr>
+{% endif %}
+
 <h2>Change Password</h2>
 <form id="password-form" method="post" action="/settings/change-password">
     <div class="grid">
@@ -71,7 +91,7 @@
         <tr>
             <td>{{ u.username }}{% if u.id == user.id %} <small>(you)</small>{% endif %}</td>
             <td>{{ u.role }}</td>
-            <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') if u.created_at else "-" }}</td>
+            <td>{{ u.created_at | localtime }}</td>
             <td>
                 {% if u.id != user.id %}
                 <form method="post" action="/settings/delete-user/{{ u.id }}" style="margin:0;"

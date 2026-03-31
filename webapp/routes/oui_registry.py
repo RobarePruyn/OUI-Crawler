@@ -140,10 +140,7 @@ def oui_lookup(
 # ── Helper ──────────────────────────────────────────────────────────
 
 def _render_oui_partial(request: Request, db: Session, venue: Venue) -> HTMLResponse:
-    from pathlib import Path
-    from fastapi.templating import Jinja2Templates
+    from ..templates_env import templates
 
-    templates = Jinja2Templates(directory=str(Path(__file__).parent.parent / "templates"))
-    templates.env.filters["fromjson"] = lambda s: json.loads(s) if s else []
     entries = db.query(OUIEntry).filter(OUIEntry.venue_id == venue.id).all()
     return templates.TemplateResponse(request, "partials/oui_registry.html", {"venue": venue, "entries": entries})

@@ -157,11 +157,16 @@ class CiscoNXOSPlatform(CiscoIOSPlatform):
           1     Po1(SU)    Eth      LACP      Eth1/49(P)   Eth1/50(P)
           2     Po2(SU)    Eth      LACP      Eth1/51(P)   Eth1/52(P)
 
+        Members may wrap to continuation lines (indented, no group number):
+          3     Po3(SU)    Eth      LACP      Eth1/1(P)    Eth1/2(P)
+                                               Eth1/3(P)    Eth1/4(P)
+
         NX-OS uses Eth abbreviations and lowercase port-channel naming.
         """
         channel_to_members: dict[str, list[str]] = {}
 
-        line_pattern = re.compile(
+        # Header line: group number + Po name + type + protocol + members
+        header_pattern = re.compile(
             r'^\s*\d+\s+'                # Group number
             r'(Po\d+)\(\S+\)\s+'         # Port-channel with flags
             r'\S+\s+'                     # Type (Eth)
@@ -170,21 +175,37 @@ class CiscoNXOSPlatform(CiscoIOSPlatform):
             re.MULTILINE
         )
 
-        for match in line_pattern.finditer(raw_output):
-            po_name_abbrev = match.group(1)          # "Po1"
-            members_raw = match.group(2)             # "Eth1/49(P)   Eth1/50(P)"
+        member_pattern = re.compile(r'(\S+?)\(\S+\)')
+        lines = raw_output.splitlines()
+        current_po_abbrev = None
+        current_members: list[str] = []
 
-            # Normalize: Po1 → port-channel1 on NX-OS
-            po_name = self.normalize_interface(po_name_abbrev)
+        for line in lines:
+            header = header_pattern.match(line)
+            if header:
+                # Save previous port-channel if any
+                if current_po_abbrev and current_members:
+                    po_name = self.normalize_interface(current_po_abbrev)
+                    channel_to_members[po_name] = current_members
+                    channel_to_members[current_po_abbrev] = current_members
 
-            member_pattern = re.compile(r'(\S+?)\(\S+\)')
-            members = []
-            for member_match in member_pattern.finditer(members_raw):
-                member_intf = self.normalize_interface(member_match.group(1))
-                members.append(member_intf)
+                current_po_abbrev = header.group(1)
+                members_raw = header.group(2)
+                current_members = [
+                    self.normalize_interface(m.group(1))
+                    for m in member_pattern.finditer(members_raw)
+                ]
+            elif current_po_abbrev and member_pattern.search(line):
+                # Continuation line — more members for the current port-channel
+                # Only treat as continuation if line is indented (no group number)
+                if re.match(r'^\s+\S+\(\S+\)', line):
+                    for m in member_pattern.finditer(line):
+                        current_members.append(self.normalize_interface(m.group(1)))
 
-            if members:
-                channel_to_members[po_name] = members
-                channel_to_members[po_name_abbrev] = members
+        # Save last port-channel
+        if current_po_abbrev and current_members:
+            po_name = self.normalize_interface(current_po_abbrev)
+            channel_to_members[po_name] = current_members
+            channel_to_members[current_po_abbrev] = current_members
 
         return channel_to_members

@@ -16,7 +16,7 @@
     <tbody>
         {% for c in changes %}
         <tr>
-            <td><small>{{ c.created_at.strftime('%m-%d %H:%M') }}</small></td>
+            <td><small>{{ c.created_at | localtime('%m-%d %H:%M') }}</small></td>
             <td>
                 {% if c.change_type == "created" %}
                     <span class="badge badge-ok">new</span>

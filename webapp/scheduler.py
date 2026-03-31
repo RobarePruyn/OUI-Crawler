@@ -35,6 +35,9 @@ def init_scheduler() -> None:
     scheduler.start()
     logger.info("Scheduler started")
 
+    # Check for missed jobs on startup
+    _catch_up_missed()
+
 
 def shutdown_scheduler() -> None:
     """Gracefully shut down the scheduler."""
@@ -78,8 +81,39 @@ def _add_apscheduler_job(sched: Schedule) -> None:
         args=[sched.id],
         name=f"{sched.job_type} for schedule {sched.id}",
         replace_existing=True,
+        misfire_grace_time=3600,  # run if up to 1 hour late
+        coalesce=True,            # collapse multiple missed fires into one
     )
     logger.info("Scheduled %s at %s (schedule_id=%d)", sched.job_type, sched.time_of_day, sched.id)
+
+
+def _catch_up_missed() -> None:
+    """Run any schedules whose time_of_day has passed today but never ran."""
+    db = SessionLocal()
+    try:
+        now = datetime.now()  # local time, matching CronTrigger default
+        schedules = db.query(Schedule).filter(Schedule.enabled == True).all()
+        for sched in schedules:
+            hour, minute = sched.time_of_day.split(":")
+            scheduled_today = now.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+            if now < scheduled_today:
+                continue  # hasn't reached trigger time today yet
+
+            # Check if it already ran today (last_run_at is UTC, convert to local date)
+            if sched.last_run_at:
+                last_run_local = sched.last_run_at.replace(tzinfo=timezone.utc).astimezone()
+                if last_run_local.date() >= now.date():
+                    continue
+
+            logger.info(
+                "Catch-up: schedule %d (%s at %s) missed today, running now",
+                sched.id, sched.job_type, sched.time_of_day,
+            )
+            _run_scheduled_job(sched.id)
+    except Exception:
+        logger.exception("Catch-up check failed")
+    finally:
+        db.close()
 
 
 def _run_scheduled_job(schedule_id: int) -> None:
