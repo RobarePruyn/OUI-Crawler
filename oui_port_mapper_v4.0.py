@@ -2284,16 +2284,23 @@ class OUIPortMapper:
         for r in actionable:
             by_switch.setdefault(r.switch_ip, []).append(r)
 
-        for switch_ip, switch_records in by_switch.items():
+        # Threaded per-switch dispatch — all switches in parallel
+        succeeded_switches: list[str] = []
+        failed_switches: list[str] = []
+
+        def _switch_worker(switch_ip: str, switch_records: list[DeviceRecord]):
+            """Push port action to a single switch."""
             platform_name = switch_records[0].platform or "cisco_ios"
             platform = get_platform(platform_name)
+            hostname = switch_records[0].switch_hostname
 
             conn, _ = self._connect(switch_ip, device_type=platform_name)
             if not conn:
                 self.log.error(
-                    f"Cannot connect to {switch_ip} for port changes"
+                    f"Cannot connect to {hostname} ({switch_ip}) "
+                    f"for port changes"
                 )
-                continue
+                return False
 
             try:
                 config_commands = []
@@ -2310,11 +2317,50 @@ class OUIPortMapper:
                 output = conn.send_config_set(config_commands)
                 self.log.debug(f"Config output:\n{output}")
                 self._maybe_save_config(conn, platform, switch_ip)
+                return True
 
             finally:
                 conn.disconnect()
 
-        print(f"\n{action.upper()} complete on {len(actionable)} port(s).")
+        with ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            futures = {
+                executor.submit(_switch_worker, ip, recs): ip
+                for ip, recs in by_switch.items()
+            }
+            for future in as_completed(futures):
+                switch_ip = futures[future]
+                try:
+                    if future.result():
+                        succeeded_switches.append(switch_ip)
+                    else:
+                        failed_switches.append(switch_ip)
+                except Exception as exc:
+                    self.log.error(
+                        f"Port action on {switch_ip} failed: {exc}"
+                    )
+                    failed_switches.append(switch_ip)
+
+        # Summary
+        total_ports = len(actionable)
+        failed_ports = sum(
+            len(by_switch[ip]) for ip in failed_switches
+        )
+        ok_ports = total_ports - failed_ports
+
+        if failed_switches:
+            print(
+                f"\n{action.upper()}: {ok_ports}/{total_ports} ports "
+                f"across {len(succeeded_switches)} switches. "
+                f"{len(failed_switches)} switch(es) FAILED: "
+                f"{', '.join(failed_switches)}"
+            )
+        else:
+            print(
+                f"\n{action.upper()} complete on {total_ports} port(s) "
+                f"across {len(succeeded_switches)} switch(es)."
+            )
 
     def cycle_ports(
         self,
@@ -2367,6 +2413,11 @@ class OUIPortMapper:
         Internal: execute a port action WITHOUT the confirmation prompt.
         Used by cycle_ports for the no-shut phase after the user already
         confirmed the shutdown. Same safety filter applies.
+
+        IMPORTANT: This method attempts ALL switches independently.
+        If the shutdown phase failed on some switches, this no-shut
+        phase still tries them — the port may have been shut by a
+        previous run and needs to come back up regardless.
         """
         # Apply the same safety filter as toggle_ports
         skip_keywords = {"unknown", "not found", "unreachable"}
@@ -2388,36 +2439,83 @@ class OUIPortMapper:
         for r in actionable:
             by_switch.setdefault(r.switch_ip, []).append(r)
 
-        for switch_ip, switch_records in by_switch.items():
+        # Threaded per-switch dispatch
+        succeeded_switches: list[str] = []
+        failed_switches: list[str] = []
+
+        def _switch_worker(switch_ip: str, switch_records: list[DeviceRecord]):
+            """Push no-shut to a single switch."""
             platform_name = switch_records[0].platform or "cisco_ios"
             platform = get_platform(platform_name)
+            hostname = switch_records[0].switch_hostname
 
             conn, _ = self._connect(switch_ip, device_type=platform_name)
             if not conn:
                 self.log.error(
-                    f"Cannot connect to {switch_ip} for port changes"
+                    f"Cannot connect to {hostname} ({switch_ip}) "
+                    f"for {action}"
                 )
-                continue
+                return False
 
             try:
                 config_commands = []
                 for r in switch_records:
-                    cmds = platform.get_no_shutdown_commands(r.interface)
+                    if action == "shutdown":
+                        cmds = platform.get_shutdown_commands(r.interface)
+                    else:
+                        cmds = platform.get_no_shutdown_commands(r.interface)
                     config_commands.extend(cmds)
                     self.log.info(
-                        f"  no shutdown: {r.switch_hostname} {r.interface}"
+                        f"  {action}: {r.switch_hostname} {r.interface}"
                     )
 
                 output = conn.send_config_set(config_commands)
                 self.log.debug(f"Config output:\n{output}")
                 self._maybe_save_config(conn, platform, switch_ip)
+                return True
 
             finally:
                 conn.disconnect()
 
-        print(
-            f"\nNO SHUTDOWN complete on {len(actionable)} port(s)."
+        with ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            futures = {
+                executor.submit(_switch_worker, ip, recs): ip
+                for ip, recs in by_switch.items()
+            }
+            for future in as_completed(futures):
+                switch_ip = futures[future]
+                try:
+                    if future.result():
+                        succeeded_switches.append(switch_ip)
+                    else:
+                        failed_switches.append(switch_ip)
+                except Exception as exc:
+                    self.log.error(
+                        f"{action} on {switch_ip} failed: {exc}"
+                    )
+                    failed_switches.append(switch_ip)
+
+        # Summary
+        total_ports = len(actionable)
+        failed_ports = sum(
+            len(by_switch[ip]) for ip in failed_switches
         )
+        ok_ports = total_ports - failed_ports
+
+        if failed_switches:
+            print(
+                f"\n{action.upper()}: {ok_ports}/{total_ports} ports "
+                f"across {len(succeeded_switches)} switches. "
+                f"{len(failed_switches)} switch(es) FAILED: "
+                f"{', '.join(failed_switches)}"
+            )
+        else:
+            print(
+                f"\n{action.upper()} complete on {total_ports} port(s) "
+                f"across {len(succeeded_switches)} switch(es)."
+            )
 
     def assign_vlans(
         self,
@@ -2539,20 +2637,33 @@ class OUIPortMapper:
         for r, target_vlan in actionable:
             by_switch.setdefault(r.switch_ip, []).append((r, target_vlan))
 
+        # Threaded per-switch dispatch
+        succeeded_switches: list[str] = []
+        failed_switches: list[str] = []
+        changed_count_lock = threading.Lock()
         changed_count = 0
-        for switch_ip, switch_records in by_switch.items():
+
+        def _vlan_worker(
+            switch_ip: str,
+            switch_records: list[tuple[DeviceRecord, str]],
+        ):
+            """Push VLAN assignment to a single switch."""
+            nonlocal changed_count
             platform_name = switch_records[0][0].platform or "aruba_aoscx"
             platform = get_platform(platform_name)
+            hostname = switch_records[0][0].switch_hostname
 
             conn, _ = self._connect(switch_ip, device_type=platform_name)
             if not conn:
                 self.log.error(
-                    f"Cannot connect to {switch_ip} for VLAN changes"
+                    f"Cannot connect to {hostname} ({switch_ip}) "
+                    f"for VLAN changes"
                 )
-                continue
+                return False
 
             try:
                 config_commands = []
+                local_count = 0
                 for r, target_vlan in switch_records:
                     cmds = platform.get_vlan_assign_commands(
                         r.interface, target_vlan
@@ -2562,18 +2673,51 @@ class OUIPortMapper:
                         f"  VLAN assign: {r.switch_hostname} "
                         f"{r.interface} → VLAN {target_vlan}"
                     )
-                    changed_count += 1
+                    local_count += 1
 
                 output = conn.send_config_set(config_commands)
                 self.log.debug(f"Config output:\n{output}")
                 self._maybe_save_config(conn, platform, switch_ip)
 
+                with changed_count_lock:
+                    changed_count += local_count
+                return True
+
             finally:
                 conn.disconnect()
 
-        print(
-            f"\nVLAN REASSIGNMENT complete on {changed_count} port(s)."
-        )
+        with ThreadPoolExecutor(
+            max_workers=self.max_workers
+        ) as executor:
+            futures = {
+                executor.submit(_vlan_worker, ip, recs): ip
+                for ip, recs in by_switch.items()
+            }
+            for future in as_completed(futures):
+                switch_ip = futures[future]
+                try:
+                    if future.result():
+                        succeeded_switches.append(switch_ip)
+                    else:
+                        failed_switches.append(switch_ip)
+                except Exception as exc:
+                    self.log.error(
+                        f"VLAN assign on {switch_ip} failed: {exc}"
+                    )
+                    failed_switches.append(switch_ip)
+
+        if failed_switches:
+            print(
+                f"\nVLAN REASSIGNMENT: {changed_count} ports across "
+                f"{len(succeeded_switches)} switches. "
+                f"{len(failed_switches)} switch(es) FAILED: "
+                f"{', '.join(failed_switches)}"
+            )
+        else:
+            print(
+                f"\nVLAN REASSIGNMENT complete on {changed_count} "
+                f"port(s) across {len(succeeded_switches)} switch(es)."
+            )
 
 
 # ---------------------------------------------------------------------------
