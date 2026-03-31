@@ -1204,6 +1204,13 @@ class OUIPortMapper:
         # Thread lock for shared state in concurrent fan-out
         self._lock = threading.Lock()
 
+        # Track IPs where SSH connection/auth failed. Used to
+        # reclassify MACs queued for these "neighbors" as access-port
+        # finds — a failed SSH connection typically means the neighbor
+        # is an endpoint (e.g., Cisco DMP-4310 advertising CDP), not
+        # a manageable switch.
+        self.failed_connections: set[str] = set()
+
         # VLAN tracking: --track-vlans records which of the specified
         # VLANs have active MAC entries on each visited switch.
         # Used to determine "which IPTV VLAN belongs to this IDF."
@@ -1492,6 +1499,11 @@ class OUIPortMapper:
             self.log.error(
                 f"Cannot connect to {switch_ip}. Trail: {trail}"
             )
+            # Track this failure so the caller can reclassify MACs
+            # queued for this IP as access-port finds instead of
+            # "not found downstream"
+            with self._lock:
+                self.failed_connections.add(switch_ip)
             return
 
         hostname = platform.get_hostname(connection)
@@ -1837,28 +1849,55 @@ class OUIPortMapper:
                         )
 
             # Handle any OUI-matching MACs that were on uplink ports
-            # but didn't get resolved on the downstream switch
+            # but didn't get resolved on the downstream switch.
+            # If the downstream SSH connection failed, the "neighbor"
+            # is likely an endpoint (e.g., DMP advertising CDP), not a
+            # switch — record as a clean access-port find.
             for downstream_ip, mac_group in recurse_targets.items():
+                connection_failed = downstream_ip in self.failed_connections
                 for entry, matched_oui in mac_group:
                     if entry.mac_address in self.resolved_macs:
                         continue
                     ip_addr = self.mac_to_ip_lookup.get(
                         entry.mac_address, "unknown"
                     )
-                    self.discovered_records.append(DeviceRecord(
-                        switch_hostname=hostname,
-                        switch_ip=switch_ip,
-                        interface=entry.interface,
-                        mac_address=entry.mac_address,
-                        ip_address=ip_addr,
-                        vlan=entry.vlan,
-                        matched_oui=matched_oui,
-                        platform=platform.platform_name,
-                        discovery_depth=current_depth,
-                        notes="on uplink, not resolved downstream",
-                        switch_tracked_vlan=tracked_vlan_str,
-                    ))
-                    self.resolved_macs.add(entry.mac_address)
+                    if connection_failed:
+                        # SSH failed → endpoint, not a switch.
+                        # Record as clean access-port find.
+                        self.discovered_records.append(DeviceRecord(
+                            switch_hostname=hostname,
+                            switch_ip=switch_ip,
+                            interface=entry.interface,
+                            mac_address=entry.mac_address,
+                            ip_address=ip_addr,
+                            vlan=entry.vlan,
+                            matched_oui=matched_oui,
+                            platform=platform.platform_name,
+                            discovery_depth=current_depth,
+                            switch_tracked_vlan=tracked_vlan_str,
+                        ))
+                        self.resolved_macs.add(entry.mac_address)
+                        self.log.info(
+                            f"{indent}    FOUND: {entry.mac_address} "
+                            f"({ip_addr}) → {hostname} "
+                            f"{entry.interface} VLAN {entry.vlan} "
+                            f"(neighbor SSH failed — endpoint)"
+                        )
+                    else:
+                        self.discovered_records.append(DeviceRecord(
+                            switch_hostname=hostname,
+                            switch_ip=switch_ip,
+                            interface=entry.interface,
+                            mac_address=entry.mac_address,
+                            ip_address=ip_addr,
+                            vlan=entry.vlan,
+                            matched_oui=matched_oui,
+                            platform=platform.platform_name,
+                            discovery_depth=current_depth,
+                            notes="on uplink, not resolved downstream",
+                            switch_tracked_vlan=tracked_vlan_str,
+                        ))
+                        self.resolved_macs.add(entry.mac_address)
 
         else:
             # Normal mode (or fan-out at depth > 0): only recurse into
@@ -1966,31 +2005,59 @@ class OUIPortMapper:
                             )
 
                 # Phase 3: After all recursion completes, record any
-                # MACs that still haven't been found downstream
+                # MACs that still haven't been found downstream.
+                # If the downstream SSH connection failed, the "neighbor"
+                # is likely an endpoint (e.g., DMP advertising CDP),
+                # not a switch — record as a clean access-port find.
                 for ds_ip, ds_name, mac_group in valid_targets:
+                    connection_failed = ds_ip in self.failed_connections
                     for entry, matched_oui in mac_group:
                         if entry.mac_address in self.resolved_macs:
                             continue
                         ip_addr = self.mac_to_ip_lookup.get(
                             entry.mac_address, "unknown"
                         )
-                        self.discovered_records.append(DeviceRecord(
-                            switch_hostname=hostname,
-                            switch_ip=switch_ip,
-                            interface=entry.interface,
-                            mac_address=entry.mac_address,
-                            ip_address=ip_addr,
-                            vlan=entry.vlan,
-                            matched_oui=matched_oui,
-                            platform=platform.platform_name,
-                            discovery_depth=current_depth,
-                            notes=(
-                                f"not found on downstream "
-                                f"{ds_name}; recorded at uplink"
-                            ),
-                            switch_tracked_vlan=tracked_vlan_str,
-                        ))
-                        self.resolved_macs.add(entry.mac_address)
+                        if connection_failed:
+                            # SSH failed → endpoint, not a switch.
+                            # Record as clean access-port find.
+                            self.discovered_records.append(DeviceRecord(
+                                switch_hostname=hostname,
+                                switch_ip=switch_ip,
+                                interface=entry.interface,
+                                mac_address=entry.mac_address,
+                                ip_address=ip_addr,
+                                vlan=entry.vlan,
+                                matched_oui=matched_oui,
+                                platform=platform.platform_name,
+                                discovery_depth=current_depth,
+                                switch_tracked_vlan=tracked_vlan_str,
+                            ))
+                            self.resolved_macs.add(entry.mac_address)
+                            self.log.info(
+                                f"{indent}    FOUND: "
+                                f"{entry.mac_address} ({ip_addr}) → "
+                                f"{hostname} {entry.interface} "
+                                f"VLAN {entry.vlan} "
+                                f"(neighbor SSH failed — endpoint)"
+                            )
+                        else:
+                            self.discovered_records.append(DeviceRecord(
+                                switch_hostname=hostname,
+                                switch_ip=switch_ip,
+                                interface=entry.interface,
+                                mac_address=entry.mac_address,
+                                ip_address=ip_addr,
+                                vlan=entry.vlan,
+                                matched_oui=matched_oui,
+                                platform=platform.platform_name,
+                                discovery_depth=current_depth,
+                                notes=(
+                                    f"not found on downstream "
+                                    f"{ds_name}; recorded at uplink"
+                                ),
+                                switch_tracked_vlan=tracked_vlan_str,
+                            ))
+                            self.resolved_macs.add(entry.mac_address)
 
     # ------------------------------------------------------------------
     # CSV export / import
