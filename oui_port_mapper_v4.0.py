@@ -40,10 +40,6 @@ Discovery Modes:
             only), then normal MAC-tracing at depth 1+. Required for
             routed-access designs where endpoint VLANs are L3-terminated
             at the edge and never trunked L2 to core.
-  Switch Inventory:
-            Crawl the fabric via CDP/LLDP and return every reachable
-            switch with hostname, management IP, and platform. No OUI
-            list required. Use --switch-inventory.
 
 Safety Features:
   - Access-port-only filter: shut/no-shut/port-cycle operations reject
@@ -82,26 +78,10 @@ Usage:
   # Reassign ports to their correct tracked VLAN
   python oui_port_mapper.py --from-csv inventory.csv --user admin --vlan-assign --dry-run
 
-  # Switch inventory — crawl fabric and list all switches
-  python oui_port_mapper.py --core 10.1.1.1 --user admin --switch-inventory
-
-  # Check port status from CSV
-  python oui_port_mapper.py --from-csv inventory.csv --user admin --port-status
-
-  # Push interface descriptions from CSV
-  python oui_port_mapper.py --from-csv inventory.csv --user admin --set-description --desc-template "{mac} {ip}"
-
-  # Compare two CSV exports
-  python oui_port_mapper.py --diff old_inventory.csv new_inventory.csv
-
 Version History:
   v4.0  — Concurrent recursion at all depths (ThreadPoolExecutor),
            --save-config to persist changes to startup-config,
-           platform-correct write-memory commands,
-           --switch-inventory for fabric topology crawl via CDP/LLDP,
-           --port-status for verifying port state from CSV,
-           --set-description for pushing interface descriptions,
-           --diff for comparing CSV exports across runs.
+           platform-correct write-memory commands.
   v3.3  — VLAN reassignment (--vlan-assign) moves access ports to the
            tracked VLAN for their switch. Platform-aware commands for
            Cisco IOS/NX-OS and Aruba AOS-CX.
@@ -185,18 +165,6 @@ class MacEntry:
     mac_address: str          # normalized xxxx.xxxx.xxxx
     entry_type: str           # DYNAMIC, STATIC, etc.
     interface: str
-
-
-@dataclass
-class SwitchRecord:
-    """A switch discovered via CDP/LLDP neighbor crawl (--switch-inventory)."""
-    switch_hostname: str
-    switch_ip: str
-    platform: str
-    discovery_depth: int = 0
-    upstream_hostname: str = ""   # switch we reached this one from
-    upstream_ip: str = ""         # management IP of upstream switch
-    upstream_interface: str = ""  # interface on upstream switch facing this one
 
 
 # ---------------------------------------------------------------------------
@@ -1030,18 +998,7 @@ PLATFORM_MAP: dict[str, type[SwitchPlatform]] = {
     "cisco_xe":       CiscoIOSPlatform,   # IOS-XE uses same syntax as IOS
     "cisco_nxos":     CiscoNXOSPlatform,
     "aruba_aoscx":     ArubaAOSCXPlatform,
-    "aruba_osswitch": ArubaAOSCXPlatform, # SSHDetect sometimes returns this for AOS-CX
-    "aruba_os":       ArubaAOSCXPlatform, # SSHDetect may also return this
-}
-
-# SSHDetect returns netmiko device_type strings that may not be the correct
-# driver for the actual hardware.  In particular, AOS-CX switches are often
-# detected as "aruba_osswitch" (legacy ArubaOS) which uses a different
-# netmiko SSH driver and mangles output.  This table remaps to the correct
-# netmiko device_type for the SSH connection.
-DEVICE_TYPE_REMAP: dict[str, str] = {
-    "aruba_osswitch": "aruba_aoscx",
-    "aruba_os":       "aruba_aoscx",
+    "aruba_osswitch": ArubaAOSCXPlatform, # close enough for our parsers
 }
 
 # Patterns in 'show version' output to identify platform
@@ -1057,30 +1014,58 @@ VERSION_FINGERPRINTS: list[tuple[str, str]] = [
 ]
 
 
-def _fingerprint_via_show_version(
+def detect_platform(
     host: str,
     username: str,
     password: str,
     enable_secret: str,
     log: logging.Logger,
-    hint: Optional[str] = None,
 ) -> tuple[Optional[str], Optional[object]]:
     """
-    Connect to a device, run 'show version', and fingerprint the output.
+    Auto-detect the platform of a network device by SSH fingerprinting.
 
-    If hint is provided, that device_type is tried first (likely to
-    succeed if the fabric is homogeneous). Returns (device_type,
-    connection) where connection is kept open if we connected with
-    the matching type, or (device_type, None) if a reconnect is needed.
+    Uses netmiko's SSHDetect first, then validates with 'show version'
+    output if needed. Returns (device_type, active_connection) or
+    (None, None) on failure.
+
+    The connection is returned still open so the caller doesn't have to
+    reconnect after detection.
     """
-    # Build try order: hint first (if valid), then the standard types
-    standard_types = ["cisco_ios", "cisco_nxos", "aruba_aoscx"]
-    if hint and hint in standard_types:
-        try_order = [hint] + [t for t in standard_types if t != hint]
-    else:
-        try_order = standard_types
+    log.info(f"Auto-detecting platform for {host}...")
 
-    for try_type in try_order:
+    # --- Attempt 1: netmiko SSHDetect ---
+    try:
+        detect_params = {
+            "device_type": "autodetect",
+            "host": host,
+            "username": username,
+            "password": password,
+            "secret": enable_secret,
+            "timeout": 30,
+        }
+        detector = SSHDetect(**detect_params)
+        best_match = detector.autodetect()
+        log.info(f"SSHDetect result for {host}: {best_match}")
+
+        if best_match and best_match in PLATFORM_MAP:
+            # SSHDetect's internal connection is not fully set up for
+            # reliable command execution, so disconnect and let the
+            # caller reconnect with the proper device_type
+            detector.connection.disconnect()
+            return best_match, None
+
+        if best_match:
+            log.debug(
+                f"SSHDetect returned '{best_match}' which is not in "
+                f"our platform map; trying show version fingerprint"
+            )
+            detector.connection.disconnect()
+
+    except Exception as exc:
+        log.debug(f"SSHDetect failed for {host}: {exc}")
+
+    # --- Attempt 2: Connect generic, run 'show version', fingerprint ---
+    for try_type in ["cisco_ios", "cisco_nxos", "aruba_aoscx"]:
         try:
             conn_params = {
                 "device_type": try_type,
@@ -1088,8 +1073,8 @@ def _fingerprint_via_show_version(
                 "username": username,
                 "password": password,
                 "secret": enable_secret,
-                "timeout": 15,
-                "read_timeout_override": 15,
+                "timeout": 30,
+                "read_timeout_override": 30,
             }
             conn = ConnectHandler(**conn_params)
             conn.enable()
@@ -1100,11 +1085,14 @@ def _fingerprint_via_show_version(
                 if re.search(pattern, version_output, re.IGNORECASE):
                     log.info(
                         f"Fingerprinted {host} as {device_type} "
-                        f"via 'show version' (connected as {try_type})"
+                        f"via 'show version'"
                     )
                     # If we connected with the right type, return the
                     # live connection so the caller doesn't have to reconnect
-                    if try_type == device_type:
+                    if try_type == device_type or (
+                        try_type == "cisco_ios"
+                        and device_type == "cisco_ios"
+                    ):
                         return device_type, conn
                     else:
                         conn.disconnect()
@@ -1120,67 +1108,6 @@ def _fingerprint_via_show_version(
         except Exception as exc:
             log.debug(f"Connection as {try_type} to {host} failed: {exc}")
             continue
-
-    return None, None
-
-
-def detect_platform(
-    host: str,
-    username: str,
-    password: str,
-    enable_secret: str,
-    log: logging.Logger,
-    hint: Optional[str] = None,
-) -> tuple[Optional[str], Optional[object]]:
-    """
-    Auto-detect the platform of a network device.
-
-    Strategy (fast to slow):
-      1. Connect and fingerprint 'show version' output. If hint is
-         provided (last successful platform), try that type first so
-         homogeneous fabrics get a single SSH session per switch.
-      2. Fall back to netmiko SSHDetect as a last resort.
-
-    Returns (device_type, active_connection) or (None, None) on failure.
-    The connection is returned still open when we connected with the
-    matching type, saving a reconnect.
-    """
-    log.info(f"Auto-detecting platform for {host}...")
-
-    # --- Attempt 1: show version fingerprint (fast path) ---
-    device_type, conn = _fingerprint_via_show_version(
-        host, username, password, enable_secret, log, hint=hint,
-    )
-    if device_type:
-        return device_type, conn
-
-    # --- Attempt 2: SSHDetect as last resort ---
-    log.info(f"Show version fingerprint failed for {host}; trying SSHDetect...")
-    try:
-        detect_params = {
-            "device_type": "autodetect",
-            "host": host,
-            "username": username,
-            "password": password,
-            "secret": enable_secret,
-            "timeout": 30,
-        }
-        detector = SSHDetect(**detect_params)
-        best_match = detector.autodetect()
-        log.info(f"SSHDetect result for {host}: {best_match}")
-        detector.connection.disconnect()
-
-        if best_match and best_match in PLATFORM_MAP:
-            remapped = DEVICE_TYPE_REMAP.get(best_match, best_match)
-            if remapped != best_match:
-                log.info(
-                    f"Remapping SSHDetect result '{best_match}' → "
-                    f"'{remapped}' for {host}"
-                )
-            return remapped, None
-
-    except Exception as exc:
-        log.debug(f"SSHDetect failed for {host}: {exc}")
 
     log.error(f"Platform auto-detection failed for {host}")
     return None, None
@@ -1243,7 +1170,6 @@ class OUIPortMapper:
         self.mac_threshold = mac_threshold
         self.save_config = save_config
         self.dry_run = dry_run
-        self._last_detected_platform: Optional[str] = None
 
         # Management subnet filter: if set, only recurse into neighbors
         # whose management IP falls within this subnet. Prevents the
@@ -1319,19 +1245,16 @@ class OUIPortMapper:
             resolved_type = self.visited_switches[target_ip]
             reuse_conn = None
         else:
-            # Auto-detect, passing last successful type as hint
+            # Auto-detect
             resolved_type, reuse_conn = detect_platform(
                 host=target_ip,
                 username=self.username,
                 password=self.password,
                 enable_secret=self.enable_secret,
                 log=self.log,
-                hint=self._last_detected_platform,
             )
             if not resolved_type:
                 return None, None
-            # Remember for next switch
-            self._last_detected_platform = resolved_type
 
         platform = get_platform(resolved_type)
 
@@ -2070,262 +1993,6 @@ class OUIPortMapper:
                         self.resolved_macs.add(entry.mac_address)
 
     # ------------------------------------------------------------------
-    # Switch inventory (--switch-inventory)
-    # ------------------------------------------------------------------
-
-    def discover_switches(self) -> list[SwitchRecord]:
-        """
-        Crawl the switching fabric via CDP/LLDP and return a list of
-        every reachable switch. No OUI matching or MAC tracing — just
-        neighbor discovery with the same dedup and guard rails as the
-        normal discovery engine.
-        """
-        self.log.info(
-            f"Starting switch inventory crawl from {self.core_ip}"
-        )
-        self.log.info(f"Max traversal depth: {self.max_depth}")
-        if self.mgmt_subnet:
-            self.log.info(
-                f"Management subnet filter: {self.mgmt_subnet}"
-            )
-
-        self.switch_inventory_records: list[SwitchRecord] = []
-
-        self._inventory_switch(
-            switch_ip=self.core_ip,
-            current_depth=0,
-            trail="core",
-            upstream_hostname="",
-            upstream_ip="",
-            upstream_interface="",
-        )
-
-        self.log.info(
-            f"\nSwitch inventory complete. "
-            f"{len(self.switch_inventory_records)} switch(es) found."
-        )
-
-        # Console summary by platform
-        platform_counts: dict[str, int] = {}
-        for rec in self.switch_inventory_records:
-            platform_counts[rec.platform] = (
-                platform_counts.get(rec.platform, 0) + 1
-            )
-
-        print(f"\n{'='*60}")
-        print(f"  SWITCH INVENTORY — {len(self.switch_inventory_records)} switches")
-        print(f"{'='*60}")
-        for rec in self.switch_inventory_records:
-            depth_prefix = "  " * min(rec.discovery_depth, 5)
-            print(
-                f"  {depth_prefix}{rec.switch_hostname:30s}  "
-                f"{rec.switch_ip:16s}  {rec.platform}"
-            )
-        print(f"{'-'*60}")
-        for plat, count in sorted(platform_counts.items()):
-            print(f"  {plat}: {count}")
-        print(f"{'='*60}\n")
-
-        return self.switch_inventory_records
-
-    def _inventory_switch(
-        self,
-        switch_ip: str,
-        current_depth: int,
-        trail: str,
-        upstream_hostname: str,
-        upstream_ip: str,
-        upstream_interface: str,
-    ):
-        """
-        Recursive per-switch inventory worker. Connects, records the
-        switch, collects CDP/LLDP neighbors, and recurses into all of
-        them. Skips ARP/MAC/OUI — purely topology crawl.
-        """
-        # --- Guard: depth limit ---
-        if current_depth > self.max_depth:
-            self.log.warning(
-                f"Max depth ({self.max_depth}) reached at {switch_ip}. "
-                f"Trail: {trail}. Stopping this branch."
-            )
-            return
-
-        # --- Guard: already visited (IP) ---
-        if switch_ip in self.visited_switches:
-            self.log.debug(
-                f"Already visited {switch_ip}, skipping. Trail: {trail}"
-            )
-            return
-
-        # --- Connect and detect platform ---
-        connection, platform = self._connect(switch_ip)
-        if not connection or not platform:
-            self.log.error(
-                f"Cannot connect to {switch_ip}. Trail: {trail}"
-            )
-            return
-
-        hostname = platform.get_hostname(connection)
-        hostname_key = hostname.lower().strip()
-
-        # --- Guard: hostname-based dedup ---
-        with self._lock:
-            if hostname_key in self.visited_hostnames:
-                self.log.debug(
-                    f"Already visited {hostname} via different IP, "
-                    f"skipping {switch_ip}. Trail: {trail}"
-                )
-                connection.disconnect()
-                return
-            self.visited_hostnames.add(hostname_key)
-            self.visited_switches[switch_ip] = platform.platform_name
-
-        indent = "  " * min(current_depth, 5)
-
-        self.log.info(
-            f"{indent}[depth={current_depth}] {hostname} "
-            f"({switch_ip}) — {platform.platform_name}"
-        )
-
-        # --- Record this switch ---
-        record = SwitchRecord(
-            switch_hostname=hostname,
-            switch_ip=switch_ip,
-            platform=platform.platform_name,
-            discovery_depth=current_depth,
-            upstream_hostname=upstream_hostname,
-            upstream_ip=upstream_ip,
-            upstream_interface=upstream_interface,
-        )
-        with self._lock:
-            self.switch_inventory_records.append(record)
-
-        try:
-            # --- Collect CDP/LLDP neighbors ---
-            neighbors = self._collect_neighbors(connection, platform)
-            self.log.info(
-                f"{indent}  Neighbors: {len(neighbors)}"
-            )
-        finally:
-            connection.disconnect()
-            self.log.debug(f"{indent}  Disconnected from {hostname}")
-
-        # --- Build target list (all neighbors, deduped) ---
-        all_neighbor_ips: dict[str, tuple[str, str]] = {}  # IP → (hostname, local_intf)
-        for nbr in neighbors:
-            if nbr.neighbor_ip and nbr.neighbor_ip not in all_neighbor_ips:
-                all_neighbor_ips[nbr.neighbor_ip] = (
-                    nbr.neighbor_hostname,
-                    nbr.local_interface,
-                )
-
-        targets: list[tuple[str, str, str]] = []  # (IP, hostname, local_intf)
-        for nbr_ip, (nbr_name, local_intf) in all_neighbor_ips.items():
-            nbr_key = nbr_name.lower().strip()
-            with self._lock:
-                already_done = (
-                    nbr_ip in self.visited_switches
-                    or nbr_key in self.visited_hostnames
-                )
-            if already_done:
-                self.log.debug(
-                    f"{indent}    Skipping {nbr_name} ({nbr_ip}) "
-                    f"— already visited"
-                )
-                continue
-            if not self._ip_in_mgmt_subnet(nbr_ip):
-                self.log.debug(
-                    f"{indent}    Skipping {nbr_name} ({nbr_ip}) "
-                    f"— outside management subnet"
-                )
-                continue
-            targets.append((nbr_ip, nbr_name, local_intf))
-
-        if not targets:
-            return
-
-        self.log.info(
-            f"{indent}  Crawling {len(targets)} neighbor(s) "
-            f"({self.max_workers} concurrent workers)"
-        )
-
-        # --- Concurrent dispatch to all neighbors ---
-        def _inventory_worker(nbr_ip: str, nbr_name: str, local_intf: str):
-            new_trail = f"{trail} → {nbr_name}"
-            self.log.info(
-                f"{indent}    → {nbr_name} ({nbr_ip})"
-            )
-            self._inventory_switch(
-                switch_ip=nbr_ip,
-                current_depth=current_depth + 1,
-                trail=new_trail,
-                upstream_hostname=hostname,
-                upstream_ip=switch_ip,
-                upstream_interface=local_intf,
-            )
-
-        with ThreadPoolExecutor(
-            max_workers=self.max_workers
-        ) as executor:
-            futures = {
-                executor.submit(
-                    _inventory_worker, ip, name, intf
-                ): (ip, name)
-                for ip, name, intf in targets
-            }
-            for future in as_completed(futures):
-                ip, name = futures[future]
-                try:
-                    future.result()
-                except Exception as exc:
-                    self.log.error(
-                        f"Inventory worker for {name} ({ip}) "
-                        f"failed: {exc}"
-                    )
-
-    def export_switch_inventory_csv(
-        self,
-        records: Optional[list[SwitchRecord]] = None,
-        filename: Optional[str] = None,
-    ) -> str:
-        """Export switch inventory records to CSV."""
-        records = records or self.switch_inventory_records
-        filename = filename or self.output_file
-
-        fieldnames = [
-            "switch_hostname",
-            "switch_ip",
-            "platform",
-            "discovery_depth",
-            "upstream_hostname",
-            "upstream_ip",
-            "upstream_interface",
-        ]
-
-        # Sort by depth, then hostname for readable output
-        sorted_records = sorted(
-            records,
-            key=lambda r: (r.discovery_depth, r.switch_hostname.lower()),
-        )
-
-        with open(filename, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            for rec in sorted_records:
-                writer.writerow({
-                    "switch_hostname": rec.switch_hostname,
-                    "switch_ip": rec.switch_ip,
-                    "platform": rec.platform,
-                    "discovery_depth": rec.discovery_depth,
-                    "upstream_hostname": rec.upstream_hostname,
-                    "upstream_ip": rec.upstream_ip,
-                    "upstream_interface": rec.upstream_interface,
-                })
-
-        print(f"Switch inventory exported to {filename}")
-        return filename
-
-    # ------------------------------------------------------------------
     # CSV export / import
     # ------------------------------------------------------------------
 
@@ -2379,14 +2046,31 @@ class OUIPortMapper:
     def load_from_csv(filename: str) -> list[DeviceRecord]:
         """Load DeviceRecord list from a previously exported CSV."""
         records = []
-        with open(filename, "r") as csvfile:
+        # encoding="utf-8-sig" strips the BOM that Excel prepends
+        # when saving CSVs. Without this, the first column name
+        # becomes '\ufeffswitch_hostname' and DeviceRecord rejects it.
+        with open(filename, "r", encoding="utf-8-sig") as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                row["discovery_depth"] = int(row.get("discovery_depth", 0))
+                # Belt-and-suspenders: strip any remaining BOM or
+                # whitespace from column names (handles hand-edited CSVs)
+                cleaned_row = {
+                    k.strip().lstrip("\ufeff"): v
+                    for k, v in row.items()
+                }
+                cleaned_row["discovery_depth"] = int(
+                    cleaned_row.get("discovery_depth", 0)
+                )
                 # Handle CSVs from older versions without tracked VLAN
-                if "switch_tracked_vlan" not in row:
-                    row["switch_tracked_vlan"] = ""
-                records.append(DeviceRecord(**row))
+                if "switch_tracked_vlan" not in cleaned_row:
+                    cleaned_row["switch_tracked_vlan"] = ""
+                # Drop any extra columns Jim may have added in Excel
+                valid_fields = set(DeviceRecord.__dataclass_fields__.keys())
+                filtered_row = {
+                    k: v for k, v in cleaned_row.items()
+                    if k in valid_fields
+                }
+                records.append(DeviceRecord(**filtered_row))
         return records
 
     # ------------------------------------------------------------------
@@ -2780,418 +2464,6 @@ class OUIPortMapper:
             f"\nVLAN REASSIGNMENT complete on {changed_count} port(s)."
         )
 
-    # ------------------------------------------------------------------
-    # Port status check
-    # ------------------------------------------------------------------
-
-    def check_port_status(
-        self,
-        records: list[DeviceRecord],
-    ):
-        """
-        SSH to each switch in the record list and check the current
-        operational status of each recorded interface. Prints a table
-        showing hostname, interface, MAC, link state, and speed/duplex.
-
-        Groups by switch IP so each switch gets a single SSH session.
-        No safety filter — reads only, no config changes.
-        """
-        if not records:
-            print("No records to check.")
-            return
-
-        # Group by switch IP
-        by_switch: dict[str, list[DeviceRecord]] = {}
-        for r in records:
-            if r.interface.lower() in ("unknown", "not found"):
-                continue
-            by_switch.setdefault(r.switch_ip, []).append(r)
-
-        # Collect results: (record, status_line)
-        results: list[tuple[DeviceRecord, str, str, str]] = []
-
-        for switch_ip, switch_records in by_switch.items():
-            platform_name = switch_records[0].platform or "cisco_ios"
-            conn, platform = self._connect(switch_ip, device_type=platform_name)
-            if not conn:
-                self.log.error(
-                    f"Cannot connect to {switch_ip} for status check"
-                )
-                for r in switch_records:
-                    results.append((r, "unreachable", "", ""))
-                continue
-
-            try:
-                # Pull interface status for the whole switch once
-                if platform_name in ("aruba_aoscx", "aruba_osswitch"):
-                    raw = conn.send_command("show interface brief")
-                else:
-                    raw = conn.send_command("show interface status")
-
-                # Parse into a lookup: normalized_interface → (status, speed_duplex)
-                status_lookup = self._parse_interface_status(
-                    raw, platform_name
-                )
-
-                for r in switch_records:
-                    intf_key = r.interface.lower().strip()
-                    if intf_key in status_lookup:
-                        link_state, detail = status_lookup[intf_key]
-                        results.append((r, link_state, detail, ""))
-                    else:
-                        results.append((r, "not found in status", "", ""))
-
-            finally:
-                conn.disconnect()
-
-        # Print results table
-        print(f"\n{'='*100}")
-        print(f"  PORT STATUS CHECK — {len(results)} port(s)")
-        print(f"{'='*100}")
-        print(
-            f"  {'Switch':<22s} {'Interface':<22s} {'MAC':<16s} "
-            f"{'IP':<16s} {'Status':<14s} {'Detail'}"
-        )
-        print(f"  {'-'*96}")
-
-        up_count = 0
-        down_count = 0
-        err_count = 0
-        other_count = 0
-
-        for r, link_state, detail, _ in results:
-            state_lower = link_state.lower()
-            if "up" in state_lower and "down" not in state_lower:
-                up_count += 1
-            elif "err" in state_lower or "disabled" in state_lower:
-                err_count += 1
-            elif "down" in state_lower or "not connect" in state_lower:
-                down_count += 1
-            else:
-                other_count += 1
-
-            print(
-                f"  {r.switch_hostname:<22s} {r.interface:<22s} "
-                f"{r.mac_address:<16s} {r.ip_address:<16s} "
-                f"{link_state:<14s} {detail}"
-            )
-
-        print(f"{'='*100}")
-        print(
-            f"  Up: {up_count}  |  Down: {down_count}  |  "
-            f"Err-disabled: {err_count}  |  Other: {other_count}"
-        )
-        print(f"{'='*100}\n")
-
-    @staticmethod
-    def _parse_interface_status(
-        raw_output: str,
-        platform_name: str,
-    ) -> dict[str, tuple[str, str]]:
-        """
-        Parse 'show interface status' (Cisco) or 'show interface brief'
-        (Aruba) into a dict mapping normalized interface name to
-        (link_state, detail_string).
-        """
-        lookup: dict[str, tuple[str, str]] = {}
-
-        if platform_name in ("aruba_aoscx", "aruba_osswitch"):
-            # AOS-CX 'show interface brief' format:
-            #   Port   Status   ...
-            #   1/1/1  up       ...
-            for line in raw_output.splitlines():
-                line = line.strip()
-                if not line or line.startswith("-") or line.lower().startswith("port"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 2:
-                    intf = parts[0].lower().strip()
-                    state = parts[1].lower().strip()
-                    detail = " ".join(parts[2:]) if len(parts) > 2 else ""
-                    lookup[intf] = (state, detail)
-        else:
-            # Cisco IOS/NX-OS 'show interface status' format:
-            #   Port      Name   Status       Vlan  Duplex  Speed  Type
-            #   Gi1/0/1          connected    10    a-full  a-1000 10/100/1000BaseTX
-            # NX-OS:
-            #   Port       Name   Status    Vlan   Duplex  Speed   Type
-            #   Eth1/1     --     connected trunk  full    10G     10Gbase-SR
-            for line in raw_output.splitlines():
-                line = line.strip()
-                if not line or line.startswith("-") or line.lower().startswith("port"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 3:
-                    intf = parts[0].lower().strip()
-                    # Find the status keyword — it's the first token that
-                    # matches a known state
-                    known_states = {
-                        "connected", "notconnect", "disabled",
-                        "err-disabled", "up", "down", "sfpAbsent",
-                        "xcvrAbsen", "noOperMem", "channelDo",
-                    }
-                    state = ""
-                    detail_parts = []
-                    found_state = False
-                    for i, p in enumerate(parts[1:], 1):
-                        if not found_state and p.lower().rstrip("*") in {
-                            s.lower() for s in known_states
-                        }:
-                            state = p.lower().rstrip("*")
-                            found_state = True
-                            detail_parts = parts[i + 1:]
-                            break
-
-                    if not state:
-                        # Fallback: assume second-to-last-ish field
-                        state = parts[2].lower() if len(parts) > 2 else "unknown"
-                        detail_parts = parts[3:] if len(parts) > 3 else []
-
-                    detail = " ".join(detail_parts)
-                    lookup[intf] = (state, detail)
-
-        return lookup
-
-    # ------------------------------------------------------------------
-    # Interface description push
-    # ------------------------------------------------------------------
-
-    def set_descriptions(
-        self,
-        records: list[DeviceRecord],
-        template: str = "{mac} {ip}",
-    ):
-        """
-        Push interface descriptions to discovered access ports based on
-        a user-supplied template. Same safety filter as other port actions.
-
-        Template placeholders:
-          {mac}       — MAC address (Cisco dotted)
-          {ip}        — IP address from ARP
-          {oui}       — matched OUI prefix
-          {vlan}      — VLAN number
-          {hostname}  — switch hostname
-        """
-        # --- Same safety filter as toggle_ports ---
-        skip_keywords = {"unknown", "not found", "unreachable"}
-        trunk_keywords = {"port-channel", "po", "lag", "vpc", "peer-link"}
-
-        actionable = []
-        skipped = 0
-
-        for r in records:
-            intf_lower = r.interface.lower()
-            if any(kw in intf_lower for kw in skip_keywords):
-                skipped += 1
-                continue
-            if any(kw in intf_lower for kw in trunk_keywords):
-                skipped += 1
-                continue
-            if r.notes.strip():
-                skipped += 1
-                continue
-            actionable.append(r)
-
-        if skipped:
-            self.log.info(
-                f"Safety filter: {len(records)} total → "
-                f"{len(actionable)} actionable ({skipped} excluded)"
-            )
-
-        if not actionable:
-            self.log.info(
-                "No actionable ports found after safety filter."
-            )
-            return
-
-        # Build description for each record
-        planned: list[tuple[DeviceRecord, str]] = []
-        for r in actionable:
-            desc = template.format(
-                mac=r.mac_address,
-                ip=r.ip_address,
-                oui=r.matched_oui,
-                vlan=r.vlan,
-                hostname=r.switch_hostname,
-            )
-            # Cisco IOS limits descriptions to 240 chars, NX-OS to 254,
-            # Aruba AOS-CX to 80. Truncate to 80 for safety.
-            desc = desc[:80]
-            planned.append((r, desc))
-
-        # Display plan
-        print(f"\n{'='*90}")
-        print(f"  SET INTERFACE DESCRIPTIONS")
-        print(f"  Ports to update: {len(planned)}")
-        print(f"  Template: {template}")
-        print(f"{'='*90}")
-        for r, desc in planned:
-            print(
-                f"  {r.switch_hostname:<22s} {r.interface:<22s} → \"{desc}\""
-            )
-        print(f"{'='*90}\n")
-
-        if self.dry_run:
-            print("[DRY RUN] No changes will be made.")
-            return
-
-        confirm = input(
-            f"Type 'YES' to set descriptions on "
-            f"{len(planned)} port(s): "
-        )
-        if confirm != "YES":
-            print("Aborted. No changes made.")
-            return
-
-        # Group by switch IP
-        by_switch: dict[str, list[tuple[DeviceRecord, str]]] = {}
-        for r, desc in planned:
-            by_switch.setdefault(r.switch_ip, []).append((r, desc))
-
-        changed_count = 0
-        for switch_ip, switch_records in by_switch.items():
-            platform_name = switch_records[0][0].platform or "cisco_ios"
-            platform = get_platform(platform_name)
-
-            conn, _ = self._connect(switch_ip, device_type=platform_name)
-            if not conn:
-                self.log.error(
-                    f"Cannot connect to {switch_ip} for description push"
-                )
-                continue
-
-            try:
-                config_commands = []
-                for r, desc in switch_records:
-                    config_commands.append(f"interface {r.interface}")
-                    config_commands.append(f"description {desc}")
-                    self.log.info(
-                        f"  description: {r.switch_hostname} "
-                        f"{r.interface} → \"{desc}\""
-                    )
-                    changed_count += 1
-
-                output = conn.send_config_set(config_commands)
-                self.log.debug(f"Config output:\n{output}")
-                self._maybe_save_config(conn, platform, switch_ip)
-
-            finally:
-                conn.disconnect()
-
-        print(
-            f"\nDESCRIPTION SET complete on {changed_count} port(s)."
-        )
-
-    # ------------------------------------------------------------------
-    # CSV diff
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def diff_csv(old_file: str, new_file: str):
-        """
-        Compare two OUI Port Mapper CSV exports and report:
-          - New devices (in new but not old)
-          - Missing devices (in old but not new)
-          - Moved devices (same MAC, different switch or port)
-        Keyed by MAC address.
-        """
-        def load_csv_by_mac(filename: str) -> dict[str, dict]:
-            result = {}
-            with open(filename, "r") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    mac = row.get("mac_address", "").strip()
-                    if mac:
-                        result[mac] = row
-            return result
-
-        old_records = load_csv_by_mac(old_file)
-        new_records = load_csv_by_mac(new_file)
-
-        old_macs = set(old_records.keys())
-        new_macs = set(new_records.keys())
-
-        added = new_macs - old_macs
-        removed = old_macs - new_macs
-        common = old_macs & new_macs
-
-        # Check for moves: same MAC, different switch or port
-        moved: list[tuple[str, dict, dict]] = []
-        for mac in common:
-            old = old_records[mac]
-            new = new_records[mac]
-            if (old.get("switch_ip") != new.get("switch_ip")
-                    or old.get("interface") != new.get("interface")):
-                moved.append((mac, old, new))
-
-        # Print report
-        print(f"\n{'='*90}")
-        print(f"  CSV DIFF: {old_file} → {new_file}")
-        print(f"{'='*90}")
-        print(
-            f"  Old: {len(old_records)} device(s)  |  "
-            f"New: {len(new_records)} device(s)"
-        )
-        print(
-            f"  Added: {len(added)}  |  Removed: {len(removed)}  |  "
-            f"Moved: {len(moved)}  |  Unchanged: "
-            f"{len(common) - len(moved)}"
-        )
-        print(f"{'='*90}")
-
-        if added:
-            print(f"\n  NEW DEVICES ({len(added)}):")
-            print(
-                f"  {'MAC':<16s} {'Switch':<22s} {'Interface':<22s} "
-                f"{'IP':<16s} {'VLAN'}"
-            )
-            print(f"  {'-'*82}")
-            for mac in sorted(added):
-                r = new_records[mac]
-                print(
-                    f"  {mac:<16s} {r.get('switch_hostname', ''):<22s} "
-                    f"{r.get('interface', ''):<22s} "
-                    f"{r.get('ip_address', ''):<16s} "
-                    f"{r.get('vlan', '')}"
-                )
-
-        if removed:
-            print(f"\n  MISSING DEVICES ({len(removed)}):")
-            print(
-                f"  {'MAC':<16s} {'Switch':<22s} {'Interface':<22s} "
-                f"{'IP':<16s} {'VLAN'}"
-            )
-            print(f"  {'-'*82}")
-            for mac in sorted(removed):
-                r = old_records[mac]
-                print(
-                    f"  {mac:<16s} {r.get('switch_hostname', ''):<22s} "
-                    f"{r.get('interface', ''):<22s} "
-                    f"{r.get('ip_address', ''):<16s} "
-                    f"{r.get('vlan', '')}"
-                )
-
-        if moved:
-            print(f"\n  MOVED DEVICES ({len(moved)}):")
-            print(
-                f"  {'MAC':<16s} {'From Switch':<22s} {'From Port':<15s} "
-                f"{'To Switch':<22s} {'To Port'}"
-            )
-            print(f"  {'-'*86}")
-            for mac, old, new in sorted(moved, key=lambda x: x[0]):
-                print(
-                    f"  {mac:<16s} "
-                    f"{old.get('switch_hostname', ''):<22s} "
-                    f"{old.get('interface', ''):<15s} "
-                    f"{new.get('switch_hostname', ''):<22s} "
-                    f"{new.get('interface', '')}"
-                )
-
-        if not added and not removed and not moved:
-            print("\n  No changes detected.")
-
-        print(f"\n{'='*90}\n")
-
 
 # ---------------------------------------------------------------------------
 # CLI entry point
@@ -3276,15 +2548,6 @@ def parse_arguments() -> argparse.Namespace:
         ),
     )
     trav.add_argument(
-        "--switch-inventory", action="store_true",
-        help=(
-            "Crawl the switching fabric via CDP/LLDP and output a list "
-            "of every reachable switch with hostname, management IP, "
-            "and platform. No OUI list required. Respects --max-depth, "
-            "--workers, and --mgmt-subnet."
-        ),
-    )
-    trav.add_argument(
         "--workers", type=int, default=10,
         help=(
             "Number of concurrent SSH sessions for fan-out mode "
@@ -3347,30 +2610,6 @@ def parse_arguments() -> argparse.Namespace:
             "switch_tracked_vlan data in the CSV."
         ),
     )
-    act_mx.add_argument(
-        "--port-status", action="store_true",
-        help=(
-            "Check current operational status (up/down/err-disabled) "
-            "of all ports in the CSV. Read-only — no config changes."
-        ),
-    )
-    act_mx.add_argument(
-        "--set-description", action="store_true",
-        help=(
-            "Push interface descriptions to discovered access ports. "
-            "Uses --desc-template for the description format. "
-            "Same safety filter as other port actions."
-        ),
-    )
-    act.add_argument(
-        "--desc-template",
-        default="{mac} {ip}",
-        help=(
-            "Template for --set-description. Placeholders: "
-            "{mac}, {ip}, {oui}, {vlan}, {hostname}. "
-            "Default: '{mac} {ip}'. Truncated to 80 chars."
-        ),
-    )
     act.add_argument(
         "--cycle-delay", type=int, default=5,
         help="Seconds to wait between shut and no-shut (default: 5)",
@@ -3391,13 +2630,6 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--from-csv",
         help="Load records from CSV instead of running discovery",
-    )
-    parser.add_argument(
-        "--diff", nargs=2, metavar=("OLD_CSV", "NEW_CSV"),
-        help=(
-            "Compare two CSV exports and report new, missing, and "
-            "moved devices. No SSH needed."
-        ),
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
@@ -3428,23 +2660,13 @@ def load_oui_list(args: argparse.Namespace) -> list[str]:
 def main():
     args = parse_arguments()
 
-    # --- Mode 0: CSV diff (no SSH, no credentials) ---
-    if args.diff:
-        OUIPortMapper.diff_csv(args.diff[0], args.diff[1])
-        return
-
     # --- Mode 1: Act on saved CSV ---
     if args.from_csv:
-        has_action = (
-            args.shutdown or args.no_shutdown or args.port_cycle
-            or args.vlan_assign or args.port_status
-            or args.set_description
-        )
-        if not has_action:
+        if not (args.shutdown or args.no_shutdown or args.port_cycle
+                or args.vlan_assign):
             print(
-                "ERROR: --from-csv requires an action flag: --shutdown, "
-                "--no-shutdown, --port-cycle, --vlan-assign, "
-                "--port-status, or --set-description"
+                "ERROR: --from-csv requires --shutdown, --no-shutdown, "
+                "--port-cycle, or --vlan-assign"
             )
             sys.exit(1)
 
@@ -3469,47 +2691,12 @@ def main():
             mapper.cycle_ports(records, delay_seconds=args.cycle_delay)
         elif args.vlan_assign:
             mapper.assign_vlans(records)
-        elif args.port_status:
-            mapper.check_port_status(records)
-        elif args.set_description:
-            mapper.set_descriptions(records, template=args.desc_template)
         else:
             action = "shutdown" if args.shutdown else "no shutdown"
             mapper.toggle_ports(records, action=action)
         return
 
-    # --- Mode 2: Switch inventory (topology crawl only) ---
-    if args.switch_inventory:
-        if not args.core:
-            print("ERROR: --core is required for --switch-inventory")
-            sys.exit(1)
-
-        username = args.user or input("SSH Username: ")
-        password = args.password or getpass.getpass("SSH Password: ")
-        forced_platform = None if args.platform == "auto" else args.platform
-
-        mapper = OUIPortMapper(
-            core_ip=args.core,
-            username=username,
-            password=password,
-            oui_list=[],
-            enable_secret=args.enable_secret or password,
-            forced_platform=forced_platform,
-            output_file=args.output,
-            max_depth=args.max_depth,
-            max_workers=args.workers,
-            mgmt_subnet=args.mgmt_subnet or "",
-            verbose=args.verbose,
-        )
-
-        switches = mapper.discover_switches()
-        if switches:
-            mapper.export_switch_inventory_csv()
-        else:
-            print("No switches discovered. No CSV exported.")
-        return
-
-    # --- Mode 3: OUI discovery ---
+    # --- Mode 2: Discovery ---
     if not args.core:
         print("ERROR: --core is required for discovery mode")
         sys.exit(1)
@@ -3561,12 +2748,6 @@ def main():
             mapper.cycle_ports(discovered, delay_seconds=args.cycle_delay)
         elif args.vlan_assign:
             mapper.assign_vlans(discovered)
-        elif args.port_status:
-            mapper.check_port_status(discovered)
-        elif args.set_description:
-            mapper.set_descriptions(
-                discovered, template=args.desc_template
-            )
     else:
         print("No matching devices found. No CSV exported.")
 
