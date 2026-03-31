@@ -30,6 +30,7 @@ class Neighbor:
     neighbor_platform: str
     neighbor_interface: str
     protocol: str
+    capabilities: str = ""
 
 
 @dataclass
