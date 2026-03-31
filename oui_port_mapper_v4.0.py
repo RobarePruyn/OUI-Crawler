@@ -156,6 +156,7 @@ class Neighbor:
     neighbor_platform: str
     neighbor_interface: str
     protocol: str             # "CDP" or "LLDP"
+    capabilities: str = ""    # CDP capabilities string (e.g., "Router Switch IGMP")
 
 
 @dataclass
@@ -427,6 +428,11 @@ class CiscoIOSPlatform(SwitchPlatform):
             remote_intf = re.search(
                 r'Port ID\s*\(outgoing port\):\s*(\S+)', block
             )
+            # CDP Capabilities field — used to distinguish switches
+            # ("Router Switch IGMP") from endpoints ("Host").
+            capabilities_match = re.search(
+                r'Capabilities:\s*(.+?)(?:\n|$)', block
+            )
 
             if device_id and ip_match:
                 # Strip trailing comma from interface names — CDP format is:
@@ -442,6 +448,10 @@ class CiscoIOSPlatform(SwitchPlatform):
                     remote_intf.group(1).rstrip(",")
                     if remote_intf else "unknown"
                 )
+                capabilities_str = (
+                    capabilities_match.group(1).strip()
+                    if capabilities_match else ""
+                )
                 neighbors.append(Neighbor(
                     local_interface=local_intf_str,
                     neighbor_hostname=device_id.group(1).split('.')[0],
@@ -449,6 +459,7 @@ class CiscoIOSPlatform(SwitchPlatform):
                     neighbor_platform=platform_match.group(1).strip() if platform_match else "unknown",
                     neighbor_interface=remote_intf_str,
                     protocol="CDP",
+                    capabilities=capabilities_str,
                 ))
 
         return neighbors
@@ -1700,6 +1711,25 @@ class OUIPortMapper:
                     )
                     neighbor = None
 
+                # If the CDP neighbor reports capabilities that don't
+                # include "Switch" or "Router", it's an endpoint (e.g.,
+                # Cisco DMP-4310 reports "Host", APs report
+                # "Trans-Bridge"). Don't waste an SSH attempt on it.
+                # LLDP neighbors without capabilities pass through
+                # (they may be switches with no capability TLV).
+                if neighbor and neighbor.capabilities:
+                    caps_lower = neighbor.capabilities.lower()
+                    if ("switch" not in caps_lower
+                            and "router" not in caps_lower):
+                        self.log.debug(
+                            f"{indent}    {entry.mac_address} on "
+                            f"{entry.interface} — neighbor "
+                            f"{neighbor.neighbor_hostname} capabilities "
+                            f"'{neighbor.capabilities}' — not a switch, "
+                            f"treating as endpoint"
+                        )
+                        neighbor = None
+
                 if neighbor:
                     # --- Known uplink: queue for recursion ---
                     nbr_ip = neighbor.neighbor_ip
@@ -1785,9 +1815,12 @@ class OUIPortMapper:
             # core's MAC table. Fan-out does NOT propagate — edge
             # switches use normal MAC-tracing recursion only.
             all_neighbor_ips: dict[str, str] = {}  # IP → hostname
+            # Track capabilities per IP for filtering
+            neighbor_caps: dict[str, str] = {}  # IP → capabilities
             for nbr in neighbors:
                 if nbr.neighbor_ip not in all_neighbor_ips:
                     all_neighbor_ips[nbr.neighbor_ip] = nbr.neighbor_hostname
+                    neighbor_caps[nbr.neighbor_ip] = nbr.capabilities
 
             # Pre-filter: skip neighbors whose hostname we've already
             # visited (catches multi-IP same-switch cases cheaply)
@@ -1811,6 +1844,17 @@ class OUIPortMapper:
                         f"— outside management subnet"
                     )
                     continue
+                # Skip CDP neighbors that aren't switches/routers
+                caps = neighbor_caps.get(nbr_ip, "")
+                if caps:
+                    caps_lower = caps.lower()
+                    if ("switch" not in caps_lower
+                            and "router" not in caps_lower):
+                        self.log.debug(
+                            f"{indent}    Skipping {nbr_name} ({nbr_ip}) "
+                            f"— capabilities '{caps}' (not a switch)"
+                        )
+                        continue
                 targets.append((nbr_ip, nbr_name))
 
             self.log.info(
