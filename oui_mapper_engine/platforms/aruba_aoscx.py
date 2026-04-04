@@ -73,9 +73,13 @@ class ArubaAOSCXPlatform(SwitchPlatform):
                 pct = max(1, min(100, pct))
             except (ValueError, TypeError):
                 pct = 1
-            cmds.append(f"rate-limit broadcast {pct} percent")
-            cmds.append(f"rate-limit multicast {pct} percent")
-            cmds.append(f"rate-limit unknown-unicast {pct} percent")
+            # Convert percentage to kbps assuming 1Gbps port (1000000 kbps).
+            # kbps works on all AOS-CX firmware versions; "percent" only
+            # works on FL.01.17+ and is rejected on older firmware like FL.01.11.
+            kbps = int(1000000 * pct / 100)
+            cmds.append(f"rate-limit broadcast {kbps} kbps")
+            cmds.append(f"rate-limit multicast {kbps} kbps")
+            cmds.append(f"rate-limit unknown-unicast {kbps} kbps")
         if description:
             cmds.append(f"description {description}")
         return cmds
@@ -101,12 +105,17 @@ class ArubaAOSCXPlatform(SwitchPlatform):
                 pc.has_portfast = True
             if re.search(r'spanning-tree bpdu-guard\b', block):
                 pc.has_bpdu_guard = True
-            storm = re.search(r'rate-limit broadcast\s+([\d.]+)(?:\s+percent)?', block)
-            if not storm:
-                storm = re.search(r'storm-control broadcast rate-(?:percentage|pps)\s+([\d.]+)', block)
+            # Match rate-limit in percent or kbps format
+            storm = re.search(r'rate-limit broadcast\s+([\d.]+)\s+percent', block)
             if storm:
                 pc.has_storm_control = True
                 pc.storm_control_level = storm.group(1)
+            else:
+                storm_kbps = re.search(r'rate-limit broadcast\s+(\d+)\s+kbps', block)
+                if storm_kbps:
+                    pc.has_storm_control = True
+                    # Convert kbps back to percentage (assuming 1Gbps port)
+                    pc.storm_control_level = str(int(int(storm_kbps.group(1)) / 10000))
             desc = re.search(r'^\s+description\s+(.+)', block, re.MULTILINE)
             if desc:
                 pc.description = desc.group(1).strip()
