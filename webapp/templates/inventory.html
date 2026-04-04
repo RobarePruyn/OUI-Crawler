@@ -13,7 +13,7 @@
             <select id="venue-select">
                 <option value="">-- Manual entry --</option>
                 {% for v in venues %}
-                <option value="{{ v.id }}">{{ v.name }} ({{ v.core_ip }})</option>
+                <option value="{{ v.id }}" {% if loop.first %}selected{% endif %}>{{ v.name }} ({{ v.core_ip }})</option>
                 {% endfor %}
             </select>
             <small class="field-help">Select a venue to use saved connection settings and credentials</small>
@@ -133,6 +133,10 @@ if (venueSelect) {
             checkReady();
         }
     });
+    // Auto-load first venue on page load (after listener is attached)
+    if (venueSelect.value) {
+        venueSelect.dispatchEvent(new Event('change'));
+    }
 }
 
 form.addEventListener('submit', function(evt) {

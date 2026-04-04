@@ -9,7 +9,7 @@ from typing import Optional
 from netmiko import ConnectHandler
 from netmiko.ssh_autodetect import SSHDetect
 
-from ..models import MacEntry, Neighbor, VlanInfo
+from ..models import MacEntry, Neighbor, PortConfig, VlanInfo
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,22 @@ class SwitchPlatform(ABC):
         """Return config commands to set an access port's VLAN."""
         ...
 
+    def get_port_config_commands(
+        self,
+        interface: str,
+        *,
+        bpdu_guard: bool = True,
+        portfast: bool = True,
+        storm_control: bool = False,
+        storm_control_level: str = "1.00",
+        description: str | None = None,
+    ) -> list[str]:
+        """Return config commands to apply port policy settings.
+
+        Subclasses override for platform-specific syntax.
+        """
+        return []
+
     def get_save_config_command(self) -> str:
         """Return the exec command to save running-config to startup."""
         return "write memory"
@@ -107,6 +123,43 @@ class SwitchPlatform(ABC):
     def get_interface_config_command(self, interface: str) -> str:
         """Return CLI command for 'show running-config interface X'."""
         return ""  # Override in subclasses
+
+    def get_all_interface_configs_command(self) -> str:
+        """Return CLI command to retrieve all interface running-configs at once."""
+        return ""  # Override in subclasses
+
+    def parse_interface_configs(self, raw_output: str) -> dict[str, PortConfig]:
+        """Parse bulk interface config output into per-interface PortConfig.
+
+        Returns a dict of normalized interface name → PortConfig.
+        """
+        return {}  # Override in subclasses
+
+    def get_civic_location_command(self) -> str:
+        """Return CLI command to retrieve civic location definitions."""
+        return ""  # Override in subclasses
+
+    def parse_civic_locations(self, raw_output: str) -> dict[str, str]:
+        """Parse civic location output into id → location name/description.
+
+        Returns a dict of location_id → human-readable location string.
+        """
+        return {}  # Override in subclasses
+
+    def enrich_civic_locations(
+        self,
+        intf_configs: dict[str, PortConfig],
+        civic_map: dict[str, str],
+    ) -> None:
+        """Populate civic_location on PortConfig entries using civic_map.
+
+        Default implementation does nothing — platforms that support civic
+        location override parse_interface_configs to store the location ID
+        in civic_location, then this method resolves IDs to names.
+        """
+        for pc in intf_configs.values():
+            if pc.civic_location and pc.civic_location in civic_map:
+                pc.civic_location = civic_map[pc.civic_location]
 
     def get_interface_stats_command(self, interface: str) -> str:
         """Return CLI command for 'show interface X' (detailed stats)."""

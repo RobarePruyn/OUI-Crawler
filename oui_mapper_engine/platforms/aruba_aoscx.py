@@ -1,6 +1,6 @@
 """Aruba AOS-CX platform implementation."""
 import re
-from ..models import MacEntry, Neighbor, VlanInfo
+from ..models import MacEntry, Neighbor, PortConfig, VlanInfo
 from ..mac_utils import normalize_mac_to_cisco
 from . import SwitchPlatform
 
@@ -44,6 +44,76 @@ class ArubaAOSCXPlatform(SwitchPlatform):
             "spanning-tree bpdu-guard",
             "spanning-tree port-type admin-edge",
         ]
+
+    def get_port_config_commands(
+        self,
+        interface: str,
+        *,
+        bpdu_guard: bool = True,
+        portfast: bool = True,
+        storm_control: bool = False,
+        storm_control_level: str = "1.00",
+        description: str | None = None,
+    ) -> list[str]:
+        """Apply port policy config on Aruba AOS-CX."""
+        cmds = [f"interface {interface}"]
+        if portfast:
+            cmds.append("spanning-tree port-type admin-edge")
+        if bpdu_guard:
+            cmds.append("spanning-tree bpdu-guard")
+        if storm_control:
+            try:
+                pct = int(float(storm_control_level))
+                pct = max(1, min(100, pct))
+            except (ValueError, TypeError):
+                pct = 1
+            cmds.append(f"rate-limit broadcast {pct} percent")
+            cmds.append(f"rate-limit multicast {pct} percent")
+            cmds.append(f"rate-limit unknown-unicast {pct} percent")
+        if description:
+            cmds.append(f"description {description}")
+        return cmds
+
+    def get_all_interface_configs_command(self) -> str:
+        return "show running-config interface"
+
+    def parse_interface_configs(self, raw_output: str) -> dict[str, PortConfig]:
+        """Parse Aruba AOS-CX 'show running-config interface' output.
+
+        AOS-CX uses 'spanning-tree bpdu-guard' and 'spanning-tree port-type admin-edge'.
+        Interface names are like '1/1/1', 'lag1', 'vlan10'.
+        """
+        configs: dict[str, PortConfig] = {}
+        blocks = re.split(r'(?=^interface\s)', raw_output, flags=re.MULTILINE)
+        for block in blocks:
+            header = re.match(r'interface\s+(\S+)', block)
+            if not header:
+                continue
+            intf = header.group(1)
+            pc = PortConfig()
+            if re.search(r'spanning-tree port-type admin-edge', block):
+                pc.has_portfast = True
+            if re.search(r'spanning-tree bpdu-guard\b', block):
+                pc.has_bpdu_guard = True
+            storm = re.search(r'rate-limit broadcast\s+([\d.]+)(?:\s+percent)?', block)
+            if not storm:
+                storm = re.search(r'storm-control broadcast rate-(?:percentage|pps)\s+([\d.]+)', block)
+            if storm:
+                pc.has_storm_control = True
+                pc.storm_control_level = storm.group(1)
+            desc = re.search(r'^\s+description\s+(.+)', block, re.MULTILINE)
+            if desc:
+                pc.description = desc.group(1).strip()
+            # AOS-CX civic location is inline: lldp med-location civic-location
+            #   or location civic-location identifier reference
+            civic_name = re.search(r'^\s+lldp med-location civic-location\s+"?([^"\n]+)"?', block, re.MULTILINE)
+            if civic_name:
+                pc.civic_location = civic_name.group(1).strip()
+            configs[intf] = pc
+            norm = self.normalize_interface(intf)
+            if norm != intf:
+                configs[norm] = pc
+        return configs
 
     def get_interface_config_command(self, interface: str) -> str:
         return f"show running-config interface {interface}"
@@ -239,10 +309,13 @@ class ArubaAOSCXPlatform(SwitchPlatform):
 
     # ── VLAN provisioning ───────────────────────────────────────────
 
-    def get_vlan_create_commands(self, vlan_id: int, name: str = "") -> list[str]:
+    def get_vlan_create_commands(self, vlan_id: int, name: str = "", *, spanning_tree: bool = True) -> list[str]:
         cmds = [f"vlan {vlan_id}"]
         if name:
             cmds.append(f" name {name}")
+        # Aruba requires explicit spanning-tree per VLAN (Cisco does it by default)
+        if spanning_tree:
+            cmds.append(f"spanning-tree vlan {vlan_id}")
         return cmds
 
     def get_svi_create_commands(

@@ -66,6 +66,20 @@ def _migrate(eng) -> None:
                 cursor.execute(f"ALTER TABLE venue_vlans ADD COLUMN {col} {col_type}")
         raw.commit()
 
+        # VenuePort config columns (collected from show running-config)
+        port_cols = [row[1] for row in cursor.execute("PRAGMA table_info(venue_ports)").fetchall()]
+        for col, col_type in [
+            ("has_portfast", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("has_bpdu_guard", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("has_storm_control", "BOOLEAN NOT NULL DEFAULT 0"),
+            ("storm_control_level", "VARCHAR(16)"),
+            ("port_description", "VARCHAR(256)"),
+            ("civic_location", "VARCHAR(256)"),
+        ]:
+            if col not in port_cols:
+                cursor.execute(f"ALTER TABLE venue_ports ADD COLUMN {col} {col_type}")
+        raw.commit()
+
         # ActionLog.job_id and ComplianceResult.job_id made nullable
         # (SQLite can't alter column nullability, but new rows work fine)
 

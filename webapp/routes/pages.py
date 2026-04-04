@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from ..auth import User, authenticate_user, get_current_user, hash_password, verify_password
-from ..database import get_db
+from ..auth import User, authenticate_user, get_current_user, get_user_venues, require_venue_access, hash_password, verify_password
+from ..database import SessionLocal, get_db
 from ..db_models import ChangeLog, ComplianceResult, DeviceResult, Job, OUIEntry, PortPolicy, Schedule, SwitchResult, ActionLog, Venue, VenuePort, VenueSwitch, VenueVlan
 from ..db_models import User as UserModel
 from ..templates_env import templates
@@ -17,6 +17,17 @@ router = APIRouter(tags=["pages"])
 
 def _render(request: Request, template: str, context: dict = None, status_code: int = 200):
     ctx = context or {}
+    # Inject venue nav context for base.html
+    user = ctx.get("user")
+    if user and "nav_venues" not in ctx:
+        db = SessionLocal()
+        try:
+            ctx["nav_venues"] = get_user_venues(db, user)
+            selected_id = request.session.get("selected_venue_id")
+            ctx["selected_venue_id"] = selected_id
+            ctx["selected_venue"] = next((v for v in ctx["nav_venues"] if v.id == selected_id), None)
+        finally:
+            db.close()
     return templates.TemplateResponse(request, template, ctx, status_code=status_code)
 
 
@@ -36,6 +47,10 @@ async def login_action(request: Request, db: Session = Depends(get_db)):
     if not user:
         return _render(request, "login.html", {"error": "Invalid credentials"}, status_code=401)
     request.session["user_id"] = user.id
+    # Auto-select the first venue the user has access to
+    venues = get_user_venues(db, user)
+    if venues:
+        request.session["selected_venue_id"] = venues[0].id
     return RedirectResponse("/", status_code=303)
 
 
@@ -53,8 +68,63 @@ def dashboard(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    jobs = db.query(Job).order_by(Job.created_at.desc()).limit(20).all()
-    return _render(request, "dashboard.html", {"user": user, "jobs": jobs})
+    venues = get_user_venues(db, user)
+    selected_id = request.session.get("selected_venue_id")
+    venue = None
+
+    if selected_id:
+        venue = db.query(Venue).get(selected_id)
+
+    # If no valid selection, pick first available
+    if not venue and venues:
+        venue = venues[0]
+        request.session["selected_venue_id"] = venue.id
+
+    ctx = {"user": user, "venues": venues, "venue": venue}
+
+    if venue:
+        # Last completed discovery
+        last_discovery = (
+            db.query(Job)
+            .filter(Job.venue_id == venue.id, Job.job_type == "discovery", Job.status == "completed")
+            .order_by(Job.completed_at.desc())
+            .first()
+        )
+        # Last completed inventory
+        last_inventory = (
+            db.query(Job)
+            .filter(Job.venue_id == venue.id, Job.job_type == "inventory", Job.status == "completed")
+            .order_by(Job.completed_at.desc())
+            .first()
+        )
+        # Compliance summary
+        compliance = db.query(ComplianceResult).filter(
+            ComplianceResult.venue_id == venue.id,
+            ComplianceResult.job_id == f"venue-{venue.id}",
+        ).all()
+        compliance_ok = sum(1 for r in compliance if r.severity == "ok")
+        compliance_warn = sum(1 for r in compliance if r.severity != "ok")
+
+        # Recent jobs for this venue
+        jobs = db.query(Job).filter(Job.venue_id == venue.id).order_by(Job.created_at.desc()).limit(15).all()
+
+        # Switch/port counts
+        switch_count = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue.id).count()
+        port_count = db.query(VenuePort).join(VenueSwitch).filter(VenueSwitch.venue_id == venue.id).count()
+
+        ctx.update({
+            "last_discovery": last_discovery,
+            "last_inventory": last_inventory,
+            "compliance_ok": compliance_ok,
+            "compliance_warn": compliance_warn,
+            "jobs": jobs,
+            "switch_count": switch_count,
+            "port_count": port_count,
+        })
+    else:
+        ctx["jobs"] = []
+
+    return _render(request, "dashboard.html", ctx)
 
 
 # ── Discovery ────────────────────────────────────────────────────────
@@ -65,20 +135,15 @@ def discovery_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    venues = db.query(Venue).order_by(Venue.name).all()
+    venues = get_user_venues(db, user)
     return _render(request, "discovery.html", {"user": user, "venues": venues})
 
 
-# ── Inventory ────────────────────────────────────────────────────────
+# ── Inventory (redirect to unified discovery page) ──────────────────
 
-@router.get("/inventory", response_class=HTMLResponse)
-def inventory_page(
-    request: Request,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    venues = db.query(Venue).order_by(Venue.name).all()
-    return _render(request, "inventory.html", {"user": user, "venues": venues})
+@router.get("/inventory")
+def inventory_redirect():
+    return RedirectResponse("/discovery", status_code=301)
 
 
 # ── Device Lookup ───────────────────────────────────────────────────
@@ -132,6 +197,23 @@ def job_progress_partial(
     return _render(request, "partials/progress.html", {"job": job, "progress": progress})
 
 
+@router.get("/partials/venue-job/{job_id}", response_class=HTMLResponse)
+def venue_job_banner_partial(
+    job_id: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Inline job progress banner for the venue detail page."""
+    from ..app import job_manager
+
+    job = db.query(Job).get(job_id)
+    if not job:
+        raise HTTPException(status_code=404)
+    progress = job_manager.get_progress(job_id)
+    return _render(request, "partials/venue_job_banner.html", {"job": job, "progress": progress})
+
+
 # ── Actions ──────────────────────────────────────────────────────────
 
 @router.get("/actions/{job_id}", response_class=HTMLResponse)
@@ -164,6 +246,24 @@ def diff_page(
     return _render(request, "diff.html", {"user": user, "jobs": discovery_jobs})
 
 
+# ── Venue Selection ──────────────────────────────────────────────────
+
+@router.get("/api/set-venue/{venue_id}")
+def set_venue(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..auth import require_venue_access
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+    require_venue_access(user, venue_id, db)
+    request.session["selected_venue_id"] = venue_id
+    return {"ok": True, "venue_id": venue_id, "venue_name": venue.name}
+
+
 # ── Venues ───────────────────────────────────────────────────────────
 
 @router.get("/venues", response_class=HTMLResponse)
@@ -172,8 +272,23 @@ def venues_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    venues = db.query(Venue).order_by(Venue.name).all()
-    return _render(request, "venues.html", {"user": user, "venues": venues})
+    venues = get_user_venues(db, user)
+    # Compliance counts per venue
+    venue_compliance: dict[int, dict] = {}
+    for v in venues:
+        sentinel = f"venue-{v.id}"
+        results = db.query(ComplianceResult).filter(
+            ComplianceResult.venue_id == v.id,
+            ComplianceResult.job_id == sentinel,
+        ).all()
+        if results:
+            venue_compliance[v.id] = {
+                "ok": sum(1 for r in results if r.severity == "ok"),
+                "warn": sum(1 for r in results if r.severity != "ok"),
+            }
+    return _render(request, "venues.html", {
+        "user": user, "venues": venues, "venue_compliance": venue_compliance,
+    })
 
 
 @router.get("/venues/new", response_class=HTMLResponse)
@@ -237,6 +352,7 @@ def venue_detail_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_venue_access(user, venue_id, db)
     venue = db.query(Venue).get(venue_id)
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
@@ -250,6 +366,7 @@ async def venue_update_action(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_venue_access(user, venue_id, db)
     from ..crypto import encrypt_credential
     venue = db.query(Venue).get(venue_id)
     if not venue:
@@ -297,6 +414,7 @@ def venue_delete_action(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_venue_access(user, venue_id, db)
     venue = db.query(Venue).get(venue_id)
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
@@ -332,7 +450,15 @@ def schedules_partial(
     if not venue:
         raise HTTPException(status_code=404)
     schedules = db.query(Schedule).filter(Schedule.venue_id == venue_id).all()
-    return _render(request, "partials/schedules.html", {"venue": venue, "schedules": schedules})
+    # Look up last job status for each schedule
+    schedule_statuses = {}
+    for s in schedules:
+        if s.last_job_id:
+            last_job = db.query(Job).get(s.last_job_id)
+            schedule_statuses[s.id] = last_job.status if last_job else None
+    return _render(request, "partials/schedules.html", {
+        "venue": venue, "schedules": schedules, "schedule_statuses": schedule_statuses,
+    })
 
 
 @router.get("/partials/port-policies/{venue_id}", response_class=HTMLResponse)
@@ -404,26 +530,49 @@ def switch_ports_partial(
         .all()
     )
     vlans = db.query(VenueVlan).filter(VenueVlan.venue_id == venue_id).order_by(VenueVlan.vlan_id).all()
-    return _render(request, "partials/switch_ports.html", {"switch": switch, "ports": ports, "venue_id": venue_id, "vlans": vlans})
+
+    # Per-port compliance status
+    compliance_results = db.query(ComplianceResult).filter(
+        ComplianceResult.venue_id == venue_id,
+        ComplianceResult.job_id == f"venue-{venue_id}",
+        ComplianceResult.switch_hostname == switch.hostname,
+    ).all()
+    port_compliance: dict[str, str] = {}  # interface → severity
+    port_compliance_detail: dict[str, str] = {}  # interface → detail
+    for cr in compliance_results:
+        port_compliance[cr.interface] = cr.severity
+        if cr.severity != "ok":
+            port_compliance_detail[cr.interface] = cr.detail or ""
+
+    return _render(request, "partials/switch_ports.html", {
+        "switch": switch, "ports": ports, "venue_id": venue_id, "vlans": vlans,
+        "port_compliance": port_compliance, "port_compliance_detail": port_compliance_detail,
+    })
 
 
 @router.get("/partials/timeline/{venue_id}", response_class=HTMLResponse)
 def timeline_partial(
     venue_id: int,
     request: Request,
+    page: int = 1,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     venue = db.query(Venue).get(venue_id)
     if not venue:
         raise HTTPException(status_code=404)
+    per_page = 50
     changes = (
         db.query(ChangeLog)
         .filter(ChangeLog.venue_id == venue_id)
         .order_by(ChangeLog.created_at.desc())
-        .limit(200)
+        .offset((page - 1) * per_page)
+        .limit(per_page + 1)
         .all()
     )
+    has_more = len(changes) > per_page
+    if has_more:
+        changes = changes[:per_page]
 
     # Enrich with entity labels for display
     switch_names: dict[int, str] = {}
@@ -455,7 +604,11 @@ def timeline_partial(
         else:
             c._entity_label = ""
 
-    return _render(request, "partials/timeline.html", {"venue": venue, "changes": changes})
+    template = "partials/timeline.html" if page == 1 else "partials/timeline_rows.html"
+    return _render(request, template, {
+        "venue": venue, "changes": changes,
+        "page": page, "has_more": has_more,
+    })
 
 
 # ── Compliance ──────────────────────────────────────────────────────
@@ -487,6 +640,7 @@ def venue_compliance_page(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    require_venue_access(user, venue_id, db)
     venue = db.query(Venue).get(venue_id)
     if not venue:
         raise HTTPException(status_code=404)
@@ -507,11 +661,50 @@ def venue_compliance_page(
     for r in results:
         r._port_id = port_lookup.get((r.switch_hostname, r.interface))
 
-    ok_count = sum(1 for r in results if r.severity == "ok")
-    warn_count = sum(1 for r in results if r.severity == "warning")
+    vlan_results = [r for r in results if r.check_type == "vlan_compliance"]
+    config_results = [r for r in results if r.check_type == "port_config"]
+    ok_count = sum(1 for r in vlan_results if r.severity == "ok")
+    warn_count = sum(1 for r in vlan_results if r.severity == "warning")
+    config_count = sum(1 for r in config_results if r.severity == "warning")
     return _render(request, "venue_compliance.html", {
         "user": user, "venue": venue, "results": results,
-        "ok_count": ok_count, "warn_count": warn_count,
+        "ok_count": ok_count, "warn_count": warn_count, "config_count": config_count,
+    })
+
+
+@router.get("/partials/compliance/{venue_id}", response_class=HTMLResponse)
+def compliance_tab_partial(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Compliance tab content for venue detail page."""
+    venue = db.query(Venue).get(venue_id)
+    if not venue:
+        raise HTTPException(status_code=404)
+    results = db.query(ComplianceResult).filter(
+        ComplianceResult.venue_id == venue_id,
+        ComplianceResult.job_id == f"venue-{venue_id}",
+    ).all()
+
+    # Build port ID lookup for actionable violations
+    switches = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue_id).all()
+    port_lookup: dict[tuple, int] = {}
+    for s in switches:
+        for p in s.ports:
+            port_lookup[(s.hostname, p.interface)] = p.id
+    for r in results:
+        r._port_id = port_lookup.get((r.switch_hostname, r.interface))
+
+    vlan_results = [r for r in results if r.check_type == "vlan_compliance"]
+    config_results = [r for r in results if r.check_type == "port_config"]
+    ok_count = sum(1 for r in vlan_results if r.severity == "ok")
+    warn_count = sum(1 for r in vlan_results if r.severity == "warning")
+    config_count = sum(1 for r in config_results if r.severity == "warning")
+    return _render(request, "partials/venue_compliance_tab.html", {
+        "venue": venue, "results": results,
+        "ok_count": ok_count, "warn_count": warn_count, "config_count": config_count,
     })
 
 
@@ -524,9 +717,10 @@ def run_venue_compliance(
     venue = db.query(Venue).get(venue_id)
     if not venue:
         raise HTTPException(status_code=404)
-    from ..compliance import check_venue_compliance
-    results = check_venue_compliance(db, venue_id)
-    return {"ok": True, "count": len(results)}
+    from ..compliance import check_venue_compliance, check_port_config_compliance
+    vlan_results = check_venue_compliance(db, venue_id)
+    config_results = check_port_config_compliance(db, venue_id)
+    return {"ok": True, "count": len(vlan_results) + len(config_results)}
 
 
 # ── Settings ─────────────────────────────────────────────────────────
@@ -538,9 +732,10 @@ def settings_page(
     db: Session = Depends(get_db),
 ):
     from ..app_settings import get_timezone, TIMEZONE_CHOICES
-    users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "admin" else []
+    users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "super_admin" else []
+    all_venues = db.query(Venue).order_by(Venue.name).all() if user.role == "super_admin" else []
     return _render(request, "settings.html", {
-        "user": user, "users": users,
+        "user": user, "users": users, "all_venues": all_venues,
         "current_tz": get_timezone(db),
         "timezone_choices": TIMEZONE_CHOICES,
     })
@@ -558,7 +753,7 @@ async def change_password(
     confirm = form.get("confirm_password", "")
 
     from ..app_settings import get_timezone, TIMEZONE_CHOICES
-    users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "admin" else []
+    users = db.query(UserModel).order_by(UserModel.username).all() if user.role == "super_admin" else []
     ctx = {"user": user, "users": users, "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES}
 
     if not verify_password(current, user.password_hash):
@@ -581,17 +776,19 @@ async def create_user(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if user.role != "admin":
+    if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Admin only")
 
     form = await request.form()
     username = form.get("username", "").strip()
     password = form.get("password", "")
-    role = form.get("role", "operator")
+    role = form.get("role", "site_admin")
+    venue_ids = [int(v) for v in form.getlist("venue_ids") if v]
 
     from ..app_settings import get_timezone, TIMEZONE_CHOICES
     users = db.query(UserModel).order_by(UserModel.username).all()
-    ctx = {"user": user, "users": users, "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES}
+    all_venues = db.query(Venue).order_by(Venue.name).all()
+    ctx = {"user": user, "users": users, "all_venues": all_venues, "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES}
 
     if not username:
         return _render(request, "settings.html", {**ctx, "message": "Username is required.", "error": True})
@@ -608,11 +805,22 @@ async def create_user(
         role=role,
     )
     db.add(new_user)
+    db.flush()
+
+    # Assign venues for site_admin
+    if role == "site_admin" and venue_ids:
+        for vid in venue_ids:
+            v = db.query(Venue).get(vid)
+            if v:
+                new_user.venues.append(v)
+
     db.commit()
 
     users = db.query(UserModel).order_by(UserModel.username).all()
+    all_venues = db.query(Venue).order_by(Venue.name).all()
     return _render(request, "settings.html", {
-        "user": user, "users": users, "message": f"User '{username}' created.",
+        "user": user, "users": users, "all_venues": all_venues,
+        "message": f"User '{username}' created.",
         "current_tz": get_timezone(db), "timezone_choices": TIMEZONE_CHOICES,
     })
 
@@ -624,7 +832,7 @@ def delete_user(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if user.role != "admin":
+    if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Admin only")
 
     target = db.query(UserModel).get(user_id)
@@ -639,13 +847,41 @@ def delete_user(
     return RedirectResponse("/settings", status_code=303)
 
 
+@router.post("/settings/user-venues/{user_id}")
+async def update_user_venues(
+    user_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+
+    target = db.query(UserModel).get(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    form = await request.form()
+    venue_ids = [int(v) for v in form.getlist("venue_ids") if v]
+
+    # Replace all venue assignments
+    target.venues.clear()
+    for vid in venue_ids:
+        v = db.query(Venue).get(vid)
+        if v:
+            target.venues.append(v)
+    db.commit()
+
+    return RedirectResponse("/settings", status_code=303)
+
+
 @router.post("/settings/timezone")
 async def set_timezone_route(
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if user.role != "admin":
+    if user.role != "super_admin":
         raise HTTPException(status_code=403, detail="Admin only")
 
     form = await request.form()

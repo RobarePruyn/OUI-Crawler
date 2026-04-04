@@ -1,0 +1,69 @@
+{# Extra timeline rows for pagination (page > 1) — swapped into #tl-load-more #}
+{% for c in changes %}
+<tr data-change-type="{{ c.change_type }}" data-entity-type="{{ c.entity_type }}">
+    <td><small>{{ c.created_at | localtime('%m-%d %H:%M') }}</small></td>
+    <td>
+        {% if c.change_type == "created" %}
+            <span class="badge badge-ok">new</span>
+        {% elif c.change_type == "updated" %}
+            {% if c.field_name == "vlan" %}
+                <span class="badge badge-vlan">vlan</span>
+            {% elif c.field_name == "mac_address" %}
+                <span class="badge badge-mac">mac</span>
+            {% elif c.field_name == "ip_address" %}
+                <span class="badge badge-ip">ip</span>
+            {% else %}
+                <span class="badge badge-warn">changed</span>
+            {% endif %}
+        {% elif c.change_type == "offline" %}
+            <span class="badge badge-offline">offline</span>
+        {% elif c.change_type == "deleted" %}
+            <span class="badge badge-err">deleted</span>
+        {% else %}
+            <span class="badge">{{ c.change_type }}</span>
+        {% endif %}
+    </td>
+    <td>
+        <strong>{{ c.entity_type }}</strong>
+        {% if c._entity_label %}<br><small>{{ c._entity_label }}</small>{% endif %}
+    </td>
+    <td>
+        {% if c.change_type == "created" %}
+            {{ c.entity_type }} discovered
+        {% elif c.field_name %}
+            <code>{{ c.field_name }}</code>
+        {% else %}
+            -
+        {% endif %}
+    </td>
+    <td>
+        {% if c.old_value and c.new_value %}
+            {{ c.old_value }} &rarr; {{ c.new_value }}
+        {% elif c.new_value %}
+            {{ c.new_value }}
+        {% elif c.old_value %}
+            <del>{{ c.old_value }}</del>
+        {% else %}
+            -
+        {% endif %}
+    </td>
+    <td>
+        {% if c.entity_type == "port" and c.field_name == "vlan" and c.old_value and c.change_type == "updated" %}
+            <button type="button" class="outline secondary" style="padding:0.1rem 0.3rem;width:auto;font-size:0.7rem;margin:0;"
+                    onclick="revertVlan({{ c.entity_id }}, {{ venue.id }}, '{{ c.old_value }}')">Revert</button>
+        {% endif %}
+    </td>
+</tr>
+{% endfor %}
+{% if has_more %}
+<tr id="tl-load-more-row">
+    <td colspan="6" style="text-align:center;">
+        <button class="outline" style="width:auto;padding:0.25rem 0.75rem;font-size:0.8rem;"
+                hx-get="/partials/timeline/{{ venue.id }}?page={{ page + 1 }}"
+                hx-target="#tl-load-more-row"
+                hx-swap="outerHTML">
+            Load more
+        </button>
+    </td>
+</tr>
+{% endif %}

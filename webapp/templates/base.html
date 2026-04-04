@@ -7,33 +7,65 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/table-utils.js"></script>
 </head>
 <body>
     {% set active_page = active_page|default("") %}
-    <nav class="container-fluid">
-        <ul>
-            <li><strong>OUI Port Mapper</strong></li>
-        </ul>
-        {% if user is defined and user %}
-        <ul>
-            <li><a href="/" {% if active_page == "dashboard" %}class="active"{% endif %}>Dashboard</a></li>
-            <li><a href="/discovery" {% if active_page == "discovery" %}class="active"{% endif %}>Discovery</a></li>
-            <li><a href="/inventory" {% if active_page == "inventory" %}class="active"{% endif %}>Inventory</a></li>
-            <li><a href="/lookup" {% if active_page == "lookup" %}class="active"{% endif %}>Lookup</a></li>
-            <li><a href="/diff" {% if active_page == "diff" %}class="active"{% endif %}>Diff</a></li>
-            <li><a href="/venues" {% if active_page == "venues" %}class="active"{% endif %}>Venues</a></li>
-            <li><a href="/settings" {% if active_page == "settings" %}class="active"{% endif %}>Settings</a></li>
-            <li><a href="/logout" class="nav-logout">Logout</a></li>
-        </ul>
-        {% endif %}
+    {% if user is defined and user %}
+    <nav class="top-nav">
+        <div class="nav-bar">
+            <span class="brand">OUI Port Mapper</span>
+            <button class="nav-toggle" onclick="this.nextElementSibling.classList.toggle('open')" aria-label="Menu">&#9776;</button>
+            <div class="nav-links">
+                <ul>
+                    <li><a href="/" {% if active_page == "dashboard" %}class="active"{% endif %}>Dashboard</a></li>
+                    {% if user.role == "super_admin" %}
+                    <li><a href="/venues" {% if active_page == "venues" %}class="active"{% endif %}>Venues</a></li>
+                    {% endif %}
+                    <li><a href="/discovery" {% if active_page == "discovery" %}class="active"{% endif %}>Discovery</a></li>
+                    <li><a href="/lookup" {% if active_page == "lookup" %}class="active"{% endif %}>Lookup</a></li>
+                    <li><a href="/diff" {% if active_page == "reports" or active_page == "diff" %}class="active"{% endif %}>Reports</a></li>
+                    <li><a href="/settings" {% if active_page == "settings" %}class="active"{% endif %}>Settings</a></li>
+                </ul>
+                <div class="nav-right">
+                    {% if nav_venues is defined and nav_venues|length > 1 %}
+                    <div class="venue-indicator">
+                        <select id="venue-nav-select" onchange="setVenue(this.value)">
+                            {% for v in nav_venues %}
+                            <option value="{{ v.id }}" {% if selected_venue_id == v.id %}selected{% endif %}>{{ v.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% elif selected_venue is defined and selected_venue %}
+                    <span class="venue-indicator venue-label">{{ selected_venue.name }}</span>
+                    {% endif %}
+                    <a href="/logout" class="nav-logout">Logout</a>
+                </div>
+            </div>
+        </div>
     </nav>
+    {% else %}
+    <nav class="top-nav">
+        <div class="nav-bar">
+            <span class="brand">OUI Port Mapper</span>
+        </div>
+    </nav>
+    {% endif %}
 
     <main class="container">
         {% block content %}{% endblock %}
     </main>
 
     <footer class="container">
-        <small>OUI Port Mapper v4.0 &mdash; Mediacast Network Solutions, Inc.</small>
+        <small>OUI Port Mapper v5.0 &mdash; Mediacast Network Solutions, Inc.</small>
     </footer>
+
+    <script>
+    function setVenue(venueId) {
+        fetch('/api/set-venue/' + venueId)
+            .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
+            .then(() => window.location.reload());
+    }
+    </script>
 </body>
 </html>

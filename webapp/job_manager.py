@@ -89,6 +89,7 @@ class JobManager:
                 mac_threshold=params.get("mac_threshold", 1),
                 mgmt_subnet=params.get("mgmt_subnet") or "",
                 track_vlans=params.get("track_vlans"),
+                vlan_subnets=params.get("vlan_subnets"),
                 progress_callback=on_progress,
             )
 

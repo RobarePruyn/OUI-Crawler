@@ -1,8 +1,16 @@
-<h3>OUI Registry ({{ entries | length }})</h3>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.5rem;">
+    <h3 style="margin-bottom:0;">OUI Registry ({{ entries | length }})</h3>
+    {% if entries %}
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="search" placeholder="Filter OUIs..." oninput="filterTable(this, 'oui-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
+        <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;" onclick="exportTableCSV('oui-table', 'oui-registry.csv')">CSV</button>
+    </div>
+    {% endif %}
+</div>
 
 {% if entries %}
 <figure>
-<table>
+<table id="oui-table">
     <thead>
         <tr>
             <th>Prefix</th>
@@ -46,9 +54,7 @@
         <!-- Edit row (hidden by default) -->
         <tr id="oui-edit-{{ e.id }}" style="display:none;">
             <td colspan="5">
-                <form hx-put="/api/venues/{{ venue.id }}/oui/{{ e.id }}"
-                      hx-target="#oui-registry"
-                      hx-swap="innerHTML">
+                <div id="oui-form-{{ e.id }}">
                     <div class="grid">
                         <label>
                             OUI Prefix
@@ -76,10 +82,13 @@
                         </label>
                     </div>
                     <div style="display:flex;gap:0.5rem;">
-                        <button type="submit" style="width:auto;padding:0.25rem 0.75rem;">Save</button>
+                        <button type="button" style="width:auto;padding:0.25rem 0.75rem;"
+                                hx-post="/api/venues/{{ venue.id }}/oui/{{ e.id }}/edit"
+                                hx-include="#oui-form-{{ e.id }}"
+                                hx-target="#oui-registry" hx-swap="innerHTML">Save</button>
                         <button type="button" class="outline secondary" style="width:auto;padding:0.25rem 0.75rem;" onclick="ouiCancel({{ e.id }})">Cancel</button>
                     </div>
-                </form>
+                </div>
             </td>
         </tr>
         {% endfor %}

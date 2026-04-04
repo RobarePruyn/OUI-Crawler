@@ -6,15 +6,15 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from ..auth import User, get_current_user
+from ..auth import User, check_venue_access, get_current_user, get_user_venues
 from ..crypto import decrypt_credential, encrypt_credential
 from ..database import get_db
-from ..db_models import Job, OUIEntry, Venue, _new_uuid, _utcnow
+from ..db_models import Job, OUIEntry, Venue, VenueVlan, _new_uuid, _utcnow
 from ..schemas import VenueCreate, VenueOut, VenueUpdate
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/venues", tags=["venues"])
+router = APIRouter(prefix="/api/venues", tags=["venues"], dependencies=[Depends(check_venue_access)])
 
 
 # ── CRUD ────────────────────────────────────────────────────────────
@@ -54,7 +54,7 @@ def list_venues(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return db.query(Venue).order_by(Venue.name).all()
+    return get_user_venues(db, user)
 
 
 @router.get("/{venue_id}", response_model=VenueOut)
@@ -239,6 +239,15 @@ def venue_discover(
     if all_vlans:
         params["track_vlans"] = sorted(all_vlans)
 
+    # Build VLAN→subnet map from VenueVlan SVI config for ARP resolution
+    venue_vlans = db.query(VenueVlan).filter(VenueVlan.venue_id == venue_id).all()
+    vlan_subnets = {}
+    for vv in venue_vlans:
+        if vv.ip_address:  # CIDR like "10.2.1.1/24"
+            vlan_subnets[str(vv.vlan_id)] = vv.ip_address
+    if vlan_subnets:
+        params["vlan_subnets"] = vlan_subnets
+
     job_id = _new_uuid()
     job = Job(
         id=job_id,
@@ -256,6 +265,20 @@ def venue_discover(
     job_manager.start_discovery(job_id, params)
 
     return {"id": job_id, "status": "pending"}
+
+
+@router.post("/{venue_id}/scan")
+def venue_scan(
+    venue_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    mode: str = "full",
+):
+    """Unified scan endpoint. mode: full (discovery+inventory), discovery, inventory."""
+    if mode == "inventory":
+        return venue_inventory(venue_id, user, db)
+    else:
+        return venue_discover(venue_id, user, db)
 
 
 @router.post("/{venue_id}/inventory")

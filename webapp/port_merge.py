@@ -106,14 +106,26 @@ def merge_discovered_ports(
         port_map = {p.interface: p for p in existing_ports}
 
         for interface, dev in port_devs:
+            # Extract port config fields only if discovery actually collected config
+            pc = getattr(dev, "port_config", None)
+            has_config = pc is not None
+
             if interface in port_map:
                 row = port_map[interface]
 
                 # Log field-level changes
                 old_vals = {f: getattr(row, f) for f in _TRACKED_FIELDS}
+                # Resolve IP: use discovered IP if available,
+                # but discard stale cached IP when VLAN changed
+                # (old IP is from a different subnet).
+                new_ip = dev.ip_address if dev.ip_address and dev.ip_address != "unknown" else None
+                vlan_changed = dev.vlan and row.vlan and dev.vlan != row.vlan
+                if not new_ip and not vlan_changed:
+                    new_ip = row.ip_address  # preserve only if VLAN didn't change
+
                 new_vals = {
                     "mac_address": dev.mac_address or row.mac_address,
-                    "ip_address": dev.ip_address or row.ip_address,
+                    "ip_address": new_ip,
                     "vlan": dev.vlan or row.vlan,
                     "matched_oui": dev.matched_oui or row.matched_oui,
                     "notes": dev.notes or None,
@@ -125,6 +137,20 @@ def merge_discovered_ports(
                 row.vlan = new_vals["vlan"]
                 row.matched_oui = new_vals["matched_oui"]
                 row.notes = new_vals["notes"]
+
+                # Only overwrite config fields when discovery actually parsed
+                # the running-config for this port. When port_config is None
+                # (interface name mismatch, uplink port, failed SSH, etc.)
+                # preserve whatever was already in the DB — including values
+                # set by optimistic updates after a successful config push.
+                if has_config:
+                    row.has_portfast = pc.has_portfast
+                    row.has_bpdu_guard = pc.has_bpdu_guard
+                    row.has_storm_control = pc.has_storm_control
+                    row.storm_control_level = pc.storm_control_level
+                    row.port_description = pc.description
+                    row.civic_location = pc.civic_location
+
                 row.last_seen_at = now
                 row.last_crawl_job_id = job_id
                 updated_count += 1
@@ -137,6 +163,12 @@ def merge_discovered_ports(
                     vlan=dev.vlan,
                     matched_oui=dev.matched_oui,
                     notes=dev.notes or None,
+                    has_portfast=pc.has_portfast if has_config else False,
+                    has_bpdu_guard=pc.has_bpdu_guard if has_config else False,
+                    has_storm_control=pc.has_storm_control if has_config else False,
+                    storm_control_level=pc.storm_control_level if has_config else None,
+                    port_description=pc.description if has_config else None,
+                    civic_location=pc.civic_location if has_config else None,
                     source="discovered",
                     first_seen_at=now,
                     last_seen_at=now,

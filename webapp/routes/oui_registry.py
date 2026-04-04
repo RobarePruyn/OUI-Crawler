@@ -6,13 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from ..auth import User, get_current_user
+from ..auth import User, check_venue_access, get_current_user
 from ..database import get_db
 from ..db_models import OUIEntry, Venue
 from ..oui_lookup import lookup_manufacturer
 from ..schemas import OUIEntryOut, OUILookupRequest, OUILookupResult
 
-router = APIRouter(tags=["oui"])
+router = APIRouter(tags=["oui"], dependencies=[Depends(check_venue_access)])
 
 
 # ── OUI CRUD (HTMX-friendly — returns partial HTML) ────────────────
@@ -62,14 +62,7 @@ async def add_oui_entry(
     return _render_oui_partial(request, db, venue)
 
 
-@router.put("/api/venues/{venue_id}/oui/{entry_id}", response_class=HTMLResponse)
-async def update_oui_entry(
-    venue_id: int,
-    entry_id: int,
-    request: Request,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
+async def _do_update_oui(venue_id, entry_id, request, db):
     entry = db.query(OUIEntry).filter(OUIEntry.id == entry_id, OUIEntry.venue_id == venue_id).first()
     if not entry:
         raise HTTPException(status_code=404, detail="OUI entry not found")
@@ -102,6 +95,22 @@ async def update_oui_entry(
 
     venue = db.query(Venue).get(venue_id)
     return _render_oui_partial(request, db, venue)
+
+
+@router.post("/api/venues/{venue_id}/oui/{entry_id}/edit", response_class=HTMLResponse)
+async def update_oui_entry_post(
+    venue_id: int, entry_id: int, request: Request,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return await _do_update_oui(venue_id, entry_id, request, db)
+
+
+@router.put("/api/venues/{venue_id}/oui/{entry_id}", response_class=HTMLResponse)
+async def update_oui_entry_put(
+    venue_id: int, entry_id: int, request: Request,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return await _do_update_oui(venue_id, entry_id, request, db)
 
 
 @router.delete("/api/venues/{venue_id}/oui/{entry_id}", response_class=HTMLResponse)

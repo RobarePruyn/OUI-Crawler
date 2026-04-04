@@ -1,7 +1,7 @@
 """Cisco IOS / IOS-XE platform implementation."""
 import ipaddress
 import re
-from ..models import MacEntry, Neighbor, VlanInfo
+from ..models import MacEntry, Neighbor, PortConfig, VlanInfo
 from . import SwitchPlatform
 
 
@@ -43,8 +43,120 @@ class CiscoIOSPlatform(SwitchPlatform):
             "spanning-tree bpduguard enable",
         ]
 
+    def get_port_config_commands(
+        self,
+        interface: str,
+        *,
+        bpdu_guard: bool = True,
+        portfast: bool = True,
+        storm_control: bool = False,
+        storm_control_level: str = "1.00",
+        description: str | None = None,
+    ) -> list[str]:
+        """Apply port policy config on Cisco IOS/IOS-XE."""
+        cmds = [f"interface {interface}"]
+        if portfast:
+            cmds.append("spanning-tree portfast")
+        if bpdu_guard:
+            cmds.append("spanning-tree bpduguard enable")
+        if storm_control:
+            cmds.append(f"storm-control broadcast level {storm_control_level}")
+            cmds.append(f"storm-control multicast level {storm_control_level}")
+        if description:
+            cmds.append(f"description {description}")
+        return cmds
+
     def get_interface_config_command(self, interface: str) -> str:
         return f"show running-config interface {interface}"
+
+    def get_all_interface_configs_command(self) -> str:
+        return "show running-config | section ^interface"
+
+    def parse_interface_configs(self, raw_output: str) -> dict[str, PortConfig]:
+        """Parse IOS/IOS-XE 'show running-config | section ^interface' output.
+
+        Splits on 'interface' boundaries, extracts portfast, bpdu guard,
+        storm-control, and description for each interface.
+        """
+        configs: dict[str, PortConfig] = {}
+        blocks = re.split(r'(?=^interface\s)', raw_output, flags=re.MULTILINE)
+        for block in blocks:
+            header = re.match(r'interface\s+(\S+)', block)
+            if not header:
+                continue
+            intf = header.group(1)
+            pc = PortConfig()
+            if re.search(r'spanning-tree portfast\b', block):
+                pc.has_portfast = True
+            if re.search(r'spanning-tree bpduguard enable', block):
+                pc.has_bpdu_guard = True
+            storm = re.search(r'storm-control broadcast level\s+([\d.]+)', block)
+            if storm:
+                pc.has_storm_control = True
+                pc.storm_control_level = storm.group(1)
+            desc = re.search(r'^\s+description\s+(.+)', block, re.MULTILINE)
+            if desc:
+                pc.description = desc.group(1).strip()
+            # Store civic-location-id (resolved later via enrich_civic_locations)
+            civic = re.search(r'location civic-location-id\s+(\S+)', block)
+            if civic:
+                pc.civic_location = civic.group(1)
+            configs[intf] = pc
+            # Also store normalized name
+            norm = self.normalize_interface(intf)
+            if norm != intf:
+                configs[norm] = pc
+        return configs
+
+    def get_civic_location_command(self) -> str:
+        return "show running-config | section ^location"
+
+    def parse_civic_locations(self, raw_output: str) -> dict[str, str]:
+        """Parse Cisco IOS civic location definitions.
+
+        Config format:
+            location civic-location identifier 1
+             name "Drop-101"
+             building "Main"
+             floor "2"
+             ...
+        !
+
+        Returns dict of identifier → name (or building/floor/room summary
+        if name is not set).
+        """
+        locations: dict[str, str] = {}
+        blocks = re.split(
+            r'(?=^location civic-location identifier\s)',
+            raw_output, flags=re.MULTILINE,
+        )
+        for block in blocks:
+            header = re.match(
+                r'location civic-location identifier\s+(\S+)', block,
+            )
+            if not header:
+                continue
+            loc_id = header.group(1)
+            # Try to extract the name field first (most useful for drop IDs)
+            name_m = re.search(r'^\s+name\s+"?([^"\n]+)"?', block, re.MULTILINE)
+            if name_m:
+                locations[loc_id] = name_m.group(1).strip()
+                continue
+            # Fall back to building/floor/room concatenation
+            parts = []
+            for field in ("building", "floor", "room"):
+                m = re.search(rf'^\s+{field}\s+"?([^"\n]+)"?', block, re.MULTILINE)
+                if m:
+                    parts.append(m.group(1).strip())
+            # Also check additional-location-information
+            ali = re.search(
+                r'^\s+additional-location-information\s+"?([^"\n]+)"?',
+                block, re.MULTILINE,
+            )
+            if ali:
+                parts.append(ali.group(1).strip())
+            locations[loc_id] = " / ".join(parts) if parts else loc_id
+        return locations
 
     def get_interface_stats_command(self, interface: str) -> str:
         return f"show interface {interface}"

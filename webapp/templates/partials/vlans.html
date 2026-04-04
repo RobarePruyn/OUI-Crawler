@@ -1,8 +1,16 @@
-<h3>VLANs ({{ vlans | length }})</h3>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.5rem;">
+    <h3 style="margin-bottom:0;">VLANs ({{ vlans | length }})</h3>
+    {% if vlans %}
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="search" placeholder="Filter VLANs..." oninput="filterTable(this, 'vlans-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
+        <a href="/api/venues/{{ venue.id }}/vlans/csv" class="outline secondary" role="button" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;text-decoration:none;">CSV</a>
+    </div>
+    {% endif %}
+</div>
 
 {% if vlans %}
 <figure>
-<table>
+<table id="vlans-table">
     <thead>
         <tr>
             <th>VLAN</th>
@@ -49,10 +57,10 @@
             <td>{{ "Yes" if v.spanning_tree_enabled else "-" }}</td>
             <td>{{ v.source }}</td>
             <td style="font-size:0.75rem;">
-                {% if v.overwrite_name %}N{% endif %}
-                {% if v.overwrite_svi %}S{% endif %}
-                {% if v.overwrite_dhcp %}D{% endif %}
-                {% if v.overwrite_dns %}X{% endif %}
+                {% if v.overwrite_name %}<abbr title="Auto-update Name from crawl">N</abbr> {% endif %}
+                {% if v.overwrite_svi %}<abbr title="Auto-update SVI/IP from crawl">S</abbr> {% endif %}
+                {% if v.overwrite_dhcp %}<abbr title="Auto-update DHCP helpers from crawl">D</abbr> {% endif %}
+                {% if v.overwrite_dns %}<abbr title="Auto-update DNS servers from crawl">X</abbr> {% endif %}
             </td>
             <td style="white-space:nowrap;">
                 <form hx-delete="/api/venues/{{ venue.id }}/vlans/{{ v.id }}"

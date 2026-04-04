@@ -1,8 +1,30 @@
-<h3>Timeline ({{ changes | length }}{% if changes | length >= 200 %}+{% endif %})</h3>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.5rem;">
+    <h3 style="margin-bottom:0;">Timeline</h3>
+    {% if changes %}
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="search" placeholder="Filter timeline..." oninput="filterTable(this, 'timeline-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
+        <a href="/api/venues/{{ venue.id }}/timeline/csv" class="outline secondary" role="button" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;text-decoration:none;">CSV</a>
+    </div>
+    {% endif %}
+</div>
 
 {% if changes %}
+{# Filter buttons — change type #}
+<div style="display:flex;gap:0.25rem;margin-bottom:0.25rem;flex-wrap:wrap;">
+    <button class="outline tl-filter active" data-filter-group="change" data-filter="all" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">All</button>
+    <button class="outline tl-filter" data-filter-group="change" data-filter="created" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">New</button>
+    <button class="outline tl-filter" data-filter-group="change" data-filter="updated" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">Changed</button>
+    <button class="outline tl-filter" data-filter-group="change" data-filter="offline" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">Offline</button>
+    <button class="outline tl-filter" data-filter-group="change" data-filter="deleted" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">Deleted</button>
+    <span style="border-left:1px solid var(--pico-muted-border-color);margin:0 0.25rem;"></span>
+    <button class="outline tl-filter active" data-filter-group="entity" data-filter="all" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">All</button>
+    <button class="outline tl-filter" data-filter-group="entity" data-filter="switch" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">Switch</button>
+    <button class="outline tl-filter" data-filter-group="entity" data-filter="port" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">Port</button>
+    <button class="outline tl-filter" data-filter-group="entity" data-filter="vlan" style="padding:0.15rem 0.5rem;width:auto;font-size:0.7rem;">VLAN</button>
+</div>
+
 <figure>
-<table>
+<table id="timeline-table">
     <thead>
         <tr>
             <th>Time</th>
@@ -15,13 +37,22 @@
     </thead>
     <tbody>
         {% for c in changes %}
-        <tr>
+        <tr data-change-type="{{ c.change_type }}" data-entity-type="{{ c.entity_type }}">
             <td><small>{{ c.created_at | localtime('%m-%d %H:%M') }}</small></td>
             <td>
                 {% if c.change_type == "created" %}
                     <span class="badge badge-ok">new</span>
                 {% elif c.change_type == "updated" %}
-                    <span class="badge badge-warn">changed</span>
+                    {# Color-coded by field type #}
+                    {% if c.field_name == "vlan" %}
+                        <span class="badge badge-vlan">vlan</span>
+                    {% elif c.field_name == "mac_address" %}
+                        <span class="badge badge-mac">mac</span>
+                    {% elif c.field_name == "ip_address" %}
+                        <span class="badge badge-ip">ip</span>
+                    {% else %}
+                        <span class="badge badge-warn">changed</span>
+                    {% endif %}
                 {% elif c.change_type == "offline" %}
                     <span class="badge badge-offline">offline</span>
                 {% elif c.change_type == "deleted" %}
@@ -62,9 +93,22 @@
             </td>
         </tr>
         {% endfor %}
+        {% if has_more %}
+        <tr id="tl-load-more-row">
+            <td colspan="6" style="text-align:center;">
+                <button class="outline" style="width:auto;padding:0.25rem 0.75rem;font-size:0.8rem;"
+                        hx-get="/partials/timeline/{{ venue.id }}?page={{ page + 1 }}"
+                        hx-target="#tl-load-more-row"
+                        hx-swap="outerHTML">
+                    Load more
+                </button>
+            </td>
+        </tr>
+        {% endif %}
     </tbody>
 </table>
 </figure>
+
 {% else %}
 <p style="color:var(--pico-muted-color);">No changes recorded yet. Run crawls to start tracking changes.</p>
 {% endif %}
@@ -87,4 +131,28 @@ function revertVlan(portId, venueId, oldVlan) {
     })
     .catch(err => { alert('Error: ' + err.message); });
 }
+
+// Timeline filter buttons
+(function() {
+    const activeFilters = { change: 'all', entity: 'all' };
+
+    function applyFilters() {
+        document.querySelectorAll('#timeline-table tbody tr').forEach(row => {
+            const changeMatch = activeFilters.change === 'all' || row.dataset.changeType === activeFilters.change;
+            const entityMatch = activeFilters.entity === 'all' || row.dataset.entityType === activeFilters.entity;
+            row.style.display = (changeMatch && entityMatch) ? '' : 'none';
+        });
+    }
+
+    document.querySelectorAll('.tl-filter').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const group = this.dataset.filterGroup;
+            // Toggle active within group
+            document.querySelectorAll('.tl-filter[data-filter-group="' + group + '"]').forEach(b => b.classList.remove('active'));
+            this.classList.add('active');
+            activeFilters[group] = this.dataset.filter;
+            applyFilters();
+        });
+    });
+})();
 </script>

@@ -4,6 +4,11 @@
 
 :root {
     --pico-font-size: 87.5%;      /* 14px base instead of 16px */
+    --opm-nav-bg: #1e293b;
+    --opm-nav-text: #cbd5e1;
+    --opm-nav-active: #3b82f6;
+    --opm-hover-bg: rgba(59, 130, 246, 0.06);
+    --opm-border: var(--pico-muted-border-color);
 }
 
 h1 { font-size: 1.6rem; }
@@ -11,32 +16,190 @@ h2 { font-size: 1.25rem; }
 h3 { font-size: 1rem; }
 
 main.container {
-    max-width: 960px;
+    max-width: 1100px;
 }
 
 /* ── Nav ─────────────────────────────────────────────────────────── */
 
-nav ul li a {
-    padding: 0.25rem 0.5rem;
-    border-radius: 4px;
+nav.top-nav {
+    background: var(--opm-nav-bg);
+    padding: 0 1rem;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    max-width: 100%;
+}
+
+nav.top-nav ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.15rem;
+}
+
+nav.top-nav .brand {
+    color: #f1f5f9;
+    font-weight: 700;
+    font-size: 0.95rem;
+    white-space: nowrap;
+    padding: 0.6rem 0;
+    margin-right: 0.75rem;
+}
+
+nav.top-nav a {
+    color: var(--opm-nav-text);
     text-decoration: none;
+    padding: 0.35rem 0.55rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    transition: background 0.15s, color 0.15s;
 }
 
-nav ul li a.active {
-    background: var(--pico-primary-background);
-    color: var(--pico-primary-inverse);
+nav.top-nav a:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #f1f5f9;
 }
 
-nav ul li a.nav-logout {
-    border: 1px solid var(--pico-muted-border-color);
-    color: var(--pico-muted-color);
-    font-size: 0.85rem;
-    padding: 0.2rem 0.6rem;
+nav.top-nav a.active {
+    background: var(--opm-nav-active);
+    color: #fff;
 }
 
-nav ul li a.nav-logout:hover {
-    border-color: var(--pico-del-color);
-    color: var(--pico-del-color);
+nav.top-nav a.nav-logout {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.78rem;
+    padding: 0.25rem 0.5rem;
+    margin-left: 0.5rem;
+}
+
+nav.top-nav a.nav-logout:hover {
+    border-color: #f87171;
+    color: #f87171;
+    background: rgba(248, 113, 113, 0.1);
+}
+
+nav.top-nav .nav-bar {
+    display: flex;
+    align-items: center;
+}
+
+nav.top-nav .nav-links {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: space-between;
+}
+
+nav.top-nav .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+
+.venue-indicator select {
+    background: rgba(255, 255, 255, 0.1);
+    color: #f1f5f9;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.8rem;
+    margin: 0;
+    cursor: pointer;
+    max-width: 180px;
+}
+
+.venue-indicator select option {
+    background: var(--opm-nav-bg);
+    color: #f1f5f9;
+}
+
+.venue-label {
+    color: var(--opm-nav-text);
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 4px;
+}
+
+/* Hamburger toggle */
+.nav-toggle {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--opm-nav-text);
+    font-size: 1.3rem;
+    cursor: pointer;
+    padding: 0.4rem 0.5rem;
+    margin: 0;
+    line-height: 1;
+}
+
+/* ── Mobile nav ──────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    nav.top-nav {
+        flex-wrap: wrap;
+    }
+
+    nav.top-nav > .nav-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        width: 100%;
+    }
+
+    .nav-toggle {
+        display: block;
+    }
+
+    nav.top-nav .nav-links {
+        display: none;
+        width: 100%;
+        flex-direction: column;
+        padding: 0.25rem 0 0.5rem;
+        gap: 0.1rem;
+    }
+
+    nav.top-nav .nav-links.open {
+        display: flex;
+    }
+
+    nav.top-nav .nav-links a {
+        padding: 0.45rem 0.6rem;
+        border-radius: 4px;
+    }
+
+    nav.top-nav .nav-right {
+        flex-direction: column;
+        align-items: flex-start;
+        margin-left: 0;
+        margin-top: 0.25rem;
+        gap: 0.25rem;
+    }
+
+    nav.top-nav a.nav-logout {
+        margin-left: 0;
+        width: fit-content;
+    }
+
+    .venue-indicator select {
+        max-width: 100%;
+    }
+
+    /* Tabs: horizontal scroll on narrow screens */
+    .tab-scroll {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .tab-scroll ul {
+        flex-wrap: nowrap;
+        min-width: max-content;
+    }
 }
 
 /* ── Footer ──────────────────────────────────────────────────────── */
@@ -44,8 +207,55 @@ nav ul li a.nav-logout:hover {
 footer {
     margin-top: 2rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--pico-muted-border-color);
+    border-top: 1px solid var(--opm-border);
     text-align: center;
+}
+
+/* ── Scan mode toggle ───────────────────────────────────────────── */
+
+.scan-mode-toggle {
+    display: inline-flex;
+    border: 1px solid var(--opm-border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 1.25rem;
+}
+
+.scan-mode {
+    margin: 0;
+    cursor: pointer;
+}
+
+.scan-mode input[type="radio"] {
+    display: none;
+}
+
+.scan-mode span {
+    display: block;
+    padding: 0.4rem 1rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--pico-muted-color);
+    border-right: 1px solid var(--opm-border);
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.scan-mode:last-child span {
+    border-right: none;
+}
+
+.scan-mode input[type="radio"]:checked + span {
+    background: var(--opm-nav-active);
+    color: #fff;
+}
+
+.scan-mode:hover span {
+    background: var(--opm-hover-bg);
+}
+
+.scan-mode input[type="radio"]:checked + span:hover {
+    background: var(--opm-nav-active);
 }
 
 /* ── Form sections ───────────────────────────────────────────────── */
@@ -53,7 +263,7 @@ footer {
 .form-section {
     margin-bottom: 1rem;
     padding: 1rem;
-    border: 1px solid var(--pico-muted-border-color);
+    border: 1px solid var(--opm-border);
     border-radius: 8px;
     background: var(--pico-card-background-color);
 }
@@ -90,7 +300,7 @@ label.required::after {
     align-items: center;
     gap: 1rem;
     padding: 0.75rem 1rem;
-    border: 1px solid var(--pico-muted-border-color);
+    border: 1px solid var(--opm-border);
     border-radius: 8px;
     background: var(--pico-card-background-color);
     margin-bottom: 0;
@@ -108,18 +318,18 @@ label.required::after {
 
 /* ── Submit button ───────────────────────────────────────────────── */
 
-button[type="submit"]:disabled,
-button.btn-primary:disabled {
+button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }
 
-button.btn-primary.loading {
+button.loading {
     position: relative;
-    color: transparent;
+    color: transparent !important;
+    pointer-events: none;
 }
 
-button.btn-primary.loading::after {
+button.loading::after {
     content: "";
     position: absolute;
     inset: 0;
@@ -136,10 +346,77 @@ button.btn-primary.loading::after {
     to { transform: rotate(360deg); }
 }
 
-/* ── Tables ──────────────────────────────────────────────────────── */
+/* ── Tables — compact & scrollable ───────────────────────────────── */
+
+figure {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+
+table {
+    font-size: 0.85rem;
+}
+
+table th,
+table td {
+    padding: 0.35rem 0.6rem;
+    vertical-align: middle;
+}
+
+table thead th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--pico-muted-color);
+    white-space: nowrap;
+    border-bottom: 2px solid var(--opm-border);
+}
+
+table tbody tr {
+    transition: background 0.1s;
+}
+
+table tbody tr:hover {
+    background: var(--opm-hover-bg);
+}
 
 table code {
     font-size: 0.85em;
+}
+
+/* ── Quick-action bar (dashboard) ────────────────────────────────── */
+
+.quick-actions {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.25rem;
+}
+
+.quick-actions a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--opm-border);
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--pico-color);
+    background: var(--pico-card-background-color);
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.quick-actions a:hover {
+    border-color: var(--opm-nav-active);
+    box-shadow: 0 1px 3px rgba(59, 130, 246, 0.12);
+}
+
+.quick-actions .qa-icon {
+    font-size: 1rem;
+    line-height: 1;
+    opacity: 0.7;
 }
 
 /* ── Action form ─────────────────────────────────────────────────── */
@@ -155,22 +432,26 @@ table code {
     border-radius: 4px;
     text-decoration: none;
     cursor: pointer;
+    font-size: 0.85rem;
+    white-space: nowrap;
 }
 
 .tab-link.active {
-    background: var(--pico-primary-background);
-    color: var(--pico-primary-inverse);
+    background: var(--opm-nav-active);
+    color: #fff;
 }
 
 /* ── Badges ────────────────────────────────────────────────────────── */
 
 .badge {
     display: inline-block;
-    padding: 0.1rem 0.4rem;
+    padding: 0.1rem 0.45rem;
     border-radius: 4px;
-    font-size: 0.75rem;
+    font-size: 0.7rem;
     font-weight: 600;
-    background: var(--pico-muted-border-color);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    background: var(--opm-border);
     color: var(--pico-muted-color);
 }
 
@@ -194,6 +475,36 @@ table code {
     color: #fff;
 }
 
+.badge-vlan {
+    background: #264653;
+    color: #fff;
+}
+
+.badge-mac {
+    background: #b5838d;
+    color: #fff;
+}
+
+.badge-ip {
+    background: #2a9d8f;
+    color: #fff;
+}
+
+.badge-running {
+    background: var(--opm-nav-active);
+    color: #fff;
+}
+
+.badge-failed {
+    background: #e76f51;
+    color: #fff;
+}
+
+.badge-completed {
+    background: #2d6a4f;
+    color: #fff;
+}
+
 /* ── Collapsible sections ───────────────────────────────────────────── */
 
 details.form-section > summary {
@@ -212,4 +523,114 @@ details.form-section > summary h3::before {
 
 details.form-section[open] > summary h3::before {
     content: "\25bc ";
+}
+
+/* ── Abbreviation tooltips ─────────────────────────────────────── */
+
+abbr[title] {
+    text-decoration: underline dotted;
+    cursor: help;
+}
+
+/* ── Per-port compliance dots ──────────────────────────────────── */
+
+.compliance-dot {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    cursor: help;
+}
+.compliance-ok   { background: var(--pico-ins-color); }
+.compliance-warn { background: var(--pico-mark-background-color, orange); }
+.compliance-err  { background: var(--pico-del-color); }
+.compliance-none { background: var(--opm-border, #ccc); }
+
+/* ── Filter buttons ────────────────────────────────────────────── */
+
+.port-filter.active,
+.tl-filter.active {
+    background: var(--pico-primary-background);
+    color: var(--pico-primary-inverse);
+    border-color: var(--pico-primary-background);
+}
+
+/* ── Stat cards (compliance/dashboard) ───────────────────────────── */
+
+.stat-row {
+    display: flex;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+}
+
+.stat-card {
+    flex: 1;
+    text-align: center;
+    padding: 0.75rem 0.5rem;
+    border: 1px solid var(--opm-border);
+    border-radius: 8px;
+    background: var(--pico-card-background-color);
+}
+
+.stat-card .stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.stat-card .stat-value-sm {
+    font-size: 0.85rem;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+.stat-card .stat-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--pico-muted-color);
+}
+
+.stat-card.stat-warn .stat-value {
+    color: var(--pico-del-color);
+}
+
+/* ── Venue cards grid ────────────────────────────────────────────── */
+
+.venue-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.venue-card {
+    padding: 1rem;
+    margin: 0;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.venue-card:hover {
+    border-color: var(--opm-nav-active);
+    box-shadow: 0 2px 8px rgba(59, 130, 246, 0.1);
+}
+
+.venue-card h3 {
+    margin: 0 0 0.25rem;
+    font-size: 1rem;
+}
+
+.venue-card p {
+    margin: 0;
+}
+
+/* ── Misc utility ────────────────────────────────────────────────── */
+
+.text-muted {
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+}
+
+.nowrap {
+    white-space: nowrap;
 }

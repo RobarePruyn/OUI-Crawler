@@ -16,6 +16,7 @@
             <th>Core IP</th>
             <th>Platform</th>
             <th>OUIs</th>
+            <th>Compliance</th>
             <th>Schedules</th>
             <th></th>
         </tr>
@@ -27,6 +28,16 @@
             <td><code>{{ v.core_ip }}</code></td>
             <td>{{ v.platform }}</td>
             <td>{{ v.oui_entries | length }}</td>
+            <td>
+                {% if v.id in venue_compliance %}
+                <span class="badge badge-ok">{{ venue_compliance[v.id].ok }}</span>
+                {% if venue_compliance[v.id].warn %}
+                <span class="badge badge-warn">{{ venue_compliance[v.id].warn }}</span>
+                {% endif %}
+                {% else %}
+                <span style="color:var(--pico-muted-color);">&mdash;</span>
+                {% endif %}
+            </td>
             <td>{{ v.schedules | selectattr("enabled") | list | length }} active</td>
             <td>
                 <a href="/venues/{{ v.id }}">Edit</a>

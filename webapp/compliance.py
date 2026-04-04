@@ -309,6 +309,154 @@ def check_venue_compliance(db: Session, venue_id: int) -> list[ComplianceResult]
     return results
 
 
+def check_port_config_compliance(db: Session, venue_id: int) -> list[ComplianceResult]:
+    """Check persistent VenuePort config state against PortPolicy for their VLAN.
+
+    Compares discovered port config (portfast, bpdu_guard, storm_control,
+    description) collected during discovery against the PortPolicy defined
+    for that VLAN. Ports that match are 'ok'; mismatches are 'warning'
+    with detail about what differs.
+    """
+    policies = db.query(PortPolicy).filter(PortPolicy.venue_id == venue_id).all()
+    if not policies:
+        return []
+
+    policy_map = {p.vlan: p for p in policies}
+
+    switches = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue_id).all()
+    switch_map = {s.id: s for s in switches}
+    ports = db.query(VenuePort).filter(
+        VenuePort.switch_id.in_([s.id for s in switches])
+    ).all() if switches else []
+
+    if not ports:
+        return []
+
+    # Clear existing port_config venue-level results
+    VENUE_SENTINEL = f"venue-{venue_id}"
+    db.query(ComplianceResult).filter(
+        ComplianceResult.venue_id == venue_id,
+        ComplianceResult.job_id == VENUE_SENTINEL,
+        ComplianceResult.check_type == "port_config",
+    ).delete()
+
+    results = []
+    for port in ports:
+        if _INFRA_INTERFACE_RE.match(port.interface or ""):
+            continue
+        device_vlan = (port.vlan or "").strip()
+        if not device_vlan or device_vlan not in policy_map:
+            continue
+
+        policy = policy_map[device_vlan]
+        switch = switch_map.get(port.switch_id)
+
+        # Compare actual config vs policy
+        mismatches = []
+        if policy.bpdu_guard and not port.has_bpdu_guard:
+            mismatches.append("missing bpdu-guard")
+        if policy.portfast and not port.has_portfast:
+            mismatches.append("missing portfast")
+        if policy.storm_control and not port.has_storm_control:
+            mismatches.append("missing storm-control")
+        elif policy.storm_control and port.has_storm_control:
+            # Check level matches — normalize both to int for comparison
+            # Policy stores "5.00", parser may extract "5"
+            try:
+                expected_int = int(float(policy.storm_control_level or "1"))
+            except (ValueError, TypeError):
+                expected_int = 1
+            try:
+                actual_int = int(float(port.storm_control_level or "0"))
+            except (ValueError, TypeError):
+                actual_int = 0
+            if actual_int and actual_int != expected_int:
+                mismatches.append(f"storm-control level {actual_int}% (expected {expected_int}%)")
+
+        # Check description template if defined
+        rendered_desc = None
+        if policy.description_template:
+            rendered_desc = _render_description(policy.description_template, port, switch)
+            actual_desc = (port.port_description or "").strip()
+            if rendered_desc and actual_desc != rendered_desc:
+                mismatches.append(f'description mismatch')
+
+        expected = _policy_summary(policy)
+        if rendered_desc:
+            expected += f', description "{rendered_desc}"'
+
+        if mismatches:
+            severity = "warning"
+            detail = f"Port config deviates from VLAN {device_vlan} policy: {'; '.join(mismatches)}"
+            if port.last_config_error:
+                detail += f" [Last push error: {port.last_config_error}]"
+        else:
+            severity = "ok"
+            detail = f"Port config matches VLAN {device_vlan} policy"
+
+        current_parts = []
+        if port.has_portfast:
+            current_parts.append("portfast")
+        if port.has_bpdu_guard:
+            current_parts.append("bpdu-guard")
+        if port.has_storm_control:
+            current_parts.append(f"storm-control {port.storm_control_level or '?'}%")
+        current_config = ", ".join(current_parts) if current_parts else "no config detected"
+
+        cr = ComplianceResult(
+            job_id=VENUE_SENTINEL,
+            venue_id=venue_id,
+            check_type="port_config",
+            switch_hostname=switch.hostname if switch else "",
+            switch_ip=switch.mgmt_ip if switch else "",
+            interface=port.interface,
+            mac_address=port.mac_address,
+            current_value=current_config,
+            expected_value=expected,
+            severity=severity,
+            detail=detail,
+        )
+        db.add(cr)
+        results.append(cr)
+
+    db.commit()
+    logger.info("Port config compliance for venue %d: %d checked, %d warnings",
+                venue_id, len(results),
+                sum(1 for r in results if r.severity == "warning"))
+    return results
+
+
+def _render_description(template: str, port: VenuePort, switch: Optional[VenueSwitch] = None) -> str:
+    """Render a description_template with available port/switch data.
+
+    Supported variables:
+        {mac}       — full MAC address (e.g. e4:30:22:b8:12:34)
+        {mac4}      — last 4 hex chars of MAC (e.g. 1234)
+        {mac6}      — last 6 hex chars of MAC (e.g. b81234)
+        {ip}        — device IP address (e.g. 10.1.21.5)
+        {oui}       — matched OUI prefix (e.g. Shure)
+        {vlan}      — current VLAN ID
+        {interface} — interface name
+        {hostname}  — switch hostname
+        {drop}      — civic location / drop number
+    """
+    raw_mac = (port.mac_address or "").replace(":", "").replace("-", "").replace(".", "")
+    try:
+        return template.format(
+            mac=port.mac_address or "",
+            mac4=raw_mac[-4:] if len(raw_mac) >= 4 else raw_mac,
+            mac6=raw_mac[-6:] if len(raw_mac) >= 6 else raw_mac,
+            ip=port.ip_address or "",
+            oui=port.matched_oui or "",
+            vlan=port.vlan or "",
+            interface=port.interface or "",
+            hostname=switch.hostname if switch else "",
+            drop=port.civic_location or "",
+        ).strip()
+    except (KeyError, IndexError, ValueError):
+        return template
+
+
 def _policy_summary(policy: PortPolicy) -> str:
     """Build a human-readable summary of a port policy."""
     parts = []

@@ -4,13 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from ..auth import User, get_current_user
+from ..auth import User, check_venue_access, get_current_user
 from ..compliance import check_port_policy_offline, check_vlan_compliance
 from ..database import get_db
 from ..db_models import ComplianceResult, Job, PortPolicy, Venue
 from ..schemas import ComplianceResultOut, ComplianceSummary
 
-router = APIRouter(tags=["compliance"])
+router = APIRouter(tags=["compliance"], dependencies=[Depends(check_venue_access)])
 
 
 # ── Compliance checks ───────────────────────────────────────────────
@@ -85,6 +85,41 @@ async def create_port_policy(
     db.commit()
 
     return _render_policies_partial(request, db, venue)
+
+
+async def _do_update_policy(venue_id, policy_id, request, db):
+    policy = db.query(PortPolicy).filter(PortPolicy.id == policy_id, PortPolicy.venue_id == venue_id).first()
+    if not policy:
+        raise HTTPException(status_code=404, detail="Port policy not found")
+
+    form = await request.form()
+    policy.vlan = form.get("vlan", policy.vlan).strip()
+    policy.bpdu_guard = "bpdu_guard" in form
+    policy.portfast = "portfast" in form
+    policy.storm_control = "storm_control" in form
+    policy.storm_control_level = form.get("storm_control_level", "1.00").strip()
+    policy.description_template = form.get("description_template", "").strip() or None
+    policy.notes = form.get("notes", "").strip() or None
+    db.commit()
+
+    venue = db.query(Venue).get(venue_id)
+    return _render_policies_partial(request, db, venue)
+
+
+@router.post("/api/venues/{venue_id}/policies/{policy_id}/edit", response_class=HTMLResponse)
+async def update_port_policy_post(
+    venue_id: int, policy_id: int, request: Request,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return await _do_update_policy(venue_id, policy_id, request, db)
+
+
+@router.put("/api/venues/{venue_id}/policies/{policy_id}", response_class=HTMLResponse)
+async def update_port_policy_put(
+    venue_id: int, policy_id: int, request: Request,
+    user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    return await _do_update_policy(venue_id, policy_id, request, db)
 
 
 @router.delete("/api/venues/{venue_id}/policies/{policy_id}", response_class=HTMLResponse)

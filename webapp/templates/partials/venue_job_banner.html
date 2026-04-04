@@ -1,0 +1,56 @@
+{# Inline job progress banner — rendered inside venue_detail.html #}
+{% if job.status == "running" or job.status == "pending" %}
+<article aria-busy="true"
+         hx-get="/partials/venue-job/{{ job.id }}"
+         hx-trigger="every 2s"
+         hx-swap="outerHTML">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div>
+            <strong>{{ job.job_type | title }} running</strong>
+            {% if progress %}
+            &mdash; {{ progress.switches_visited }} switches, {{ progress.devices_found }} devices
+            {% endif %}
+            {% if progress and progress.message %}
+            <br><small>{{ progress.message }}</small>
+            {% endif %}
+        </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+            <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;">Full view</a>
+            <form hx-post="/api/jobs/{{ job.id }}/cancel" hx-swap="none" style="margin:0;">
+                <button type="submit" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Cancel</button>
+            </form>
+        </div>
+    </div>
+</article>
+{% elif job.status == "completed" %}
+<article id="venue-job-done">
+    <div style="display:flex;align-items:center;justify-content:space-between;">
+        <p style="margin-bottom:0;">
+            {{ job.job_type | title }} completed &mdash;
+            {{ job.switches_visited }} switches, {{ job.devices_found }} devices.
+        </p>
+        <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;">View details</a>
+    </div>
+</article>
+<script>
+// Auto-refresh the Switches tab after a job completes
+(function() {
+    const sw = document.getElementById('venue-switches');
+    if (sw) htmx.ajax('GET', '/partials/switches/{{ job.venue_id }}', {target: '#venue-switches', swap: 'innerHTML'});
+})();
+</script>
+{% elif job.status == "failed" %}
+<article>
+    <p style="margin-bottom:0;">
+        <mark>{{ job.job_type | title }} failed</mark> &mdash;
+        {{ job.error_message or "Unknown error" }}
+        <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;margin-left:0.5rem;">View details</a>
+    </p>
+</article>
+{% elif job.status == "cancelled" %}
+<article>
+    <p style="margin-bottom:0;">{{ job.job_type | title }} cancelled.
+        <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;margin-left:0.5rem;">View details</a>
+    </p>
+</article>
+{% endif %}

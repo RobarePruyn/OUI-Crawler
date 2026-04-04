@@ -1,8 +1,16 @@
-<h3>Switches ({{ switches | length }})</h3>
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.5rem;">
+    <h3 style="margin-bottom:0;">Switches ({{ switches | length }})</h3>
+    {% if switches %}
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="search" placeholder="Filter switches..." oninput="filterTable(this, 'switches-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
+        <a href="/api/venues/{{ venue.id }}/switches/csv" class="outline secondary" role="button" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;text-decoration:none;">CSV</a>
+    </div>
+    {% endif %}
+</div>
 
 {% if switches %}
 <figure>
-<table>
+<table id="switches-table">
     <thead>
         <tr>
             <th>Status</th>

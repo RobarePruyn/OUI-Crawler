@@ -2,40 +2,68 @@
 {% set active_page = "dashboard" %}
 {% block title %}Dashboard - OUI Port Mapper{% endblock %}
 {% block content %}
-<h1>Dashboard</h1>
 
-<div class="grid">
-    <article>
-        <header>Discovery</header>
-        <p>Find devices by OUI prefix across the switching fabric.</p>
-        <a href="/discovery" role="button">New Discovery</a>
-    </article>
-    <article>
-        <header>Switch Inventory</header>
-        <p>Crawl CDP/LLDP to list all reachable switches.</p>
-        <a href="/inventory" role="button">New Inventory</a>
-    </article>
-    <article>
-        <header>Compare Runs</header>
-        <p>Diff two discovery runs to see new, missing, and moved devices.</p>
-        <a href="/diff" role="button">Compare</a>
-    </article>
-    <article>
-        <header>Venues</header>
-        <p>Manage venues, view network state, switches, and compliance.</p>
-        <a href="/venues" role="button">Venues</a>
-    </article>
+{% if venue %}
+{# ── Venue-centric dashboard ─────────────────────────────────── #}
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.75rem;">
+    <div>
+        <h1 style="margin-bottom:0.1rem;">{{ venue.name }}</h1>
+        <span class="text-muted" style="font-size:0.85rem;">
+            <code>{{ venue.core_ip }}</code>
+            &middot; {{ venue.platform }}
+            &middot; {{ switch_count }} switch{{ 'es' if switch_count != 1 }}
+            &middot; {{ port_count }} port{{ 's' if port_count != 1 }}
+        </span>
+    </div>
+    {% if user.role == "super_admin" and venues|length > 1 %}
+    <select onchange="setVenue(this.value)" style="width:auto;margin:0;padding:0.3rem 0.5rem;font-size:0.82rem;">
+        {% for v in venues %}
+        <option value="{{ v.id }}" {% if v.id == venue.id %}selected{% endif %}>{{ v.name }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
 </div>
 
-<h2>Recent Jobs</h2>
+<div class="stat-row">
+    <div class="stat-card">
+        <div class="stat-value">{{ compliance_ok }}</div>
+        <div class="stat-label">Ports Compliant</div>
+    </div>
+    <div class="stat-card {% if compliance_warn > 0 %}stat-warn{% endif %}">
+        <div class="stat-value">{{ compliance_warn }}</div>
+        <div class="stat-label">Issues Found</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value-sm">{{ last_discovery.completed_at | localtime if last_discovery else "Never" }}</div>
+        <div class="stat-label">Last Discovery</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value-sm">{{ last_inventory.completed_at | localtime if last_inventory else "Never" }}</div>
+        <div class="stat-label">Last Inventory</div>
+    </div>
+</div>
+
+<div class="quick-actions">
+    <a href="/discovery"><span class="qa-icon">&#x25B6;</span> Full Scan</a>
+    <a href="/venues/{{ venue.id }}/compliance"><span class="qa-icon">&#x2714;</span> Compliance</a>
+    <a href="/lookup"><span class="qa-icon">&#x1F50D;</span> Device Lookup</a>
+    <a href="/venues/{{ venue.id }}"><span class="qa-icon">&#x2699;</span> Venue Config</a>
+</div>
+
+<div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.5rem;">
+    <h2 style="margin-bottom:0;">Recent Jobs</h2>
+    {% if jobs %}
+    <input type="search" placeholder="Filter jobs..." oninput="filterTable(this, 'jobs-table')" style="margin:0;padding:0.2rem 0.5rem;width:14rem;font-size:0.8rem;">
+    {% endif %}
+</div>
+
 {% if jobs %}
 <figure>
-<table>
+<table id="jobs-table">
     <thead>
         <tr>
             <th>Type</th>
             <th>Status</th>
-            <th>Core IP</th>
             <th>Switches</th>
             <th>Devices</th>
             <th>Created</th>
@@ -48,23 +76,22 @@
             <td>{{ job.job_type }}</td>
             <td>
                 {% if job.status == "running" %}
-                <span aria-busy="true">Running</span>
+                <span class="badge badge-running">running</span>
                 {% elif job.status == "completed" %}
-                Completed
+                <span class="badge badge-completed">done</span>
                 {% elif job.status == "failed" %}
-                <mark>Failed</mark>
+                <span class="badge badge-failed">failed</span>
                 {% else %}
-                {{ job.status }}
+                <span class="badge">{{ job.status }}</span>
                 {% endif %}
             </td>
-            <td>{{ job.core_ip or "-" }}</td>
             <td>{{ job.switches_visited }}</td>
             <td>{{ job.devices_found }}</td>
-            <td>{{ job.created_at | localtime }}</td>
-            <td>
+            <td class="nowrap">{{ job.created_at | localtime }}</td>
+            <td class="nowrap">
                 <a href="/jobs/{{ job.id }}">View</a>
                 {% if job.job_type == "discovery" and job.status == "completed" %}
-                | <a href="/actions/{{ job.id }}">Actions</a>
+                &middot; <a href="/actions/{{ job.id }}">Actions</a>
                 {% endif %}
             </td>
         </tr>
@@ -73,6 +100,25 @@
 </table>
 </figure>
 {% else %}
-<p>No jobs yet. Start a discovery or inventory above.</p>
+<p class="text-muted">No jobs yet for this venue. Start a scan to get going.</p>
 {% endif %}
+
+{% elif venues %}
+{# ── Super admin: no venue selected, show venue cards ────────── #}
+<h1>Venues</h1>
+<div class="venue-cards">
+    {% for v in venues %}
+    <article class="venue-card" onclick="setVenue({{ v.id }})" style="cursor:pointer;">
+        <h3>{{ v.name }}</h3>
+        <p class="text-muted"><code>{{ v.core_ip }}</code> &middot; {{ v.platform }}</p>
+    </article>
+    {% endfor %}
+</div>
+
+{% else %}
+{# ── No venues at all ────────────────────────────────────────── #}
+<h1>Dashboard</h1>
+<p>No venues configured yet. <a href="/venues/new">Create your first venue</a> to get started.</p>
+{% endif %}
+
 {% endblock %}

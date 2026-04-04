@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Table,
     Text,
     UniqueConstraint,
 )
@@ -35,6 +36,16 @@ class AppSetting(Base):
     value = Column(Text, nullable=False)
 
 
+# ── User-Venue Association ──────────────────────────────────────────
+
+user_venue = Table(
+    "user_venues",
+    Base.metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("venue_id", Integer, ForeignKey("venues.id", ondelete="CASCADE"), primary_key=True),
+)
+
+
 # ── Users ────────────────────────────────────────────────────────────
 
 class User(Base):
@@ -43,8 +54,10 @@ class User(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     username = Column(String(64), unique=True, nullable=False, index=True)
     password_hash = Column(String(256), nullable=False)
-    role = Column(String(32), nullable=False, default="admin")
+    role = Column(String(32), nullable=False, default="super_admin")
     created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+    venues = relationship("Venue", secondary=user_venue, backref="users")
 
 
 # ── Jobs ─────────────────────────────────────────────────────────────
@@ -334,6 +347,17 @@ class VenuePort(Base):
     vlan = Column(String(16))
     matched_oui = Column(String(12))
     notes = Column(Text)
+
+    # Port config state from last discovery (show running-config)
+    has_portfast = Column(Boolean, default=False)
+    has_bpdu_guard = Column(Boolean, default=False)
+    has_storm_control = Column(Boolean, default=False)
+    storm_control_level = Column(String(16))
+    port_description = Column(String(256))
+    civic_location = Column(String(256))
+
+    # Last config push error (None = no error or never pushed)
+    last_config_error = Column(Text)
 
     # State
     source = Column(String(16), nullable=False, default="discovered")

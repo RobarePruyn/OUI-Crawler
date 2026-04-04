@@ -6,30 +6,81 @@
     <thead>
         <tr>
             <th>VLAN</th>
-            <th>BPDU Guard</th>
-            <th>Portfast</th>
-            <th>Storm Control</th>
-            <th>Level</th>
-            <th>Desc Template</th>
+            <th><abbr title="Enables BPDU Guard on the port. If a BPDU is received, the port is error-disabled to prevent loops from unauthorized switches.">BPDU Guard</abbr></th>
+            <th><abbr title="Enables spanning-tree portfast (or edge port) so the port transitions immediately to forwarding, skipping the STP listening/learning delay.">Portfast</abbr></th>
+            <th><abbr title="Enables storm control for broadcast and multicast traffic. When traffic exceeds the configured Level (% of port bandwidth), excess frames are dropped.">Storm Control</abbr></th>
+            <th><abbr title="Storm control threshold as a percentage of port bandwidth (e.g. 1.00 = 1%). Applied to both broadcast and multicast.">Level</abbr></th>
+            <th><abbr title="Template for the port description pushed to the switch. Variables: {mac} = full MAC, {mac4} = last 4 hex of MAC, {mac6} = last 6 hex of MAC, {ip} = device IP, {oui} = matched OUI name, {vlan} = VLAN ID, {interface} = port name, {hostname} = switch hostname, {drop} = civic location / drop number.">Description Template</abbr></th>
+            <th>Notes</th>
             <th></th>
         </tr>
     </thead>
     <tbody>
         {% for p in policies %}
-        <tr>
+        <tr id="policy-row-{{ p.id }}">
             <td>{{ p.vlan }}</td>
             <td>{{ "Yes" if p.bpdu_guard else "No" }}</td>
             <td>{{ "Yes" if p.portfast else "No" }}</td>
             <td>{{ "Yes" if p.storm_control else "No" }}</td>
             <td>{{ p.storm_control_level if p.storm_control else "-" }}</td>
             <td>{{ p.description_template or "-" }}</td>
-            <td>
+            <td>{{ p.notes or "-" }}</td>
+            <td style="white-space:nowrap;">
+                <button type="button" class="outline" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;"
+                        onclick="editPolicy({{ p.id }}, this)">Edit</button>
                 <form hx-delete="/api/venues/{{ venue.id }}/policies/{{ p.id }}"
                       hx-target="#port-policies" hx-swap="innerHTML"
                       hx-confirm="Delete this policy?"
-                      style="margin:0;">
+                      style="margin:0;display:inline;">
                     <button type="submit" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;">Delete</button>
                 </form>
+            </td>
+        </tr>
+        <tr id="policy-edit-{{ p.id }}" style="display:none;">
+            <td colspan="8">
+                <div id="policy-form-{{ p.id }}">
+                    <div class="grid">
+                        <label>
+                            VLAN
+                            <input type="text" name="vlan" value="{{ p.vlan }}" required>
+                        </label>
+                        <label>
+                            Description Template
+                            <input type="text" name="description_template" value="{{ p.description_template or '' }}">
+                            <small class="field-help">Variables: {mac} {mac4} {mac6} {ip} {oui} {vlan} {interface} {hostname} {drop}</small>
+                        </label>
+                        <label>
+                            Notes
+                            <input type="text" name="notes" value="{{ p.notes or '' }}">
+                        </label>
+                    </div>
+                    <div class="grid">
+                        <label>
+                            <input type="checkbox" name="bpdu_guard" value="true" {{ "checked" if p.bpdu_guard }}>
+                            BPDU Guard
+                        </label>
+                        <label>
+                            <input type="checkbox" name="portfast" value="true" {{ "checked" if p.portfast }}>
+                            Portfast
+                        </label>
+                        <label>
+                            <input type="checkbox" name="storm_control" value="true" {{ "checked" if p.storm_control }}>
+                            Storm Control
+                        </label>
+                        <label>
+                            Level
+                            <input type="text" name="storm_control_level" value="{{ p.storm_control_level or '1.00' }}">
+                        </label>
+                    </div>
+                    <div style="display:flex;gap:0.5rem;">
+                        <button type="button" style="width:auto;"
+                                hx-post="/api/venues/{{ venue.id }}/policies/{{ p.id }}/edit"
+                                hx-include="#policy-form-{{ p.id }}"
+                                hx-target="#port-policies" hx-swap="innerHTML">Save</button>
+                        <button type="button" class="outline secondary" style="width:auto;"
+                                onclick="cancelEdit({{ p.id }})">Cancel</button>
+                    </div>
+                </div>
             </td>
         </tr>
         {% endfor %}
@@ -48,7 +99,8 @@
         </label>
         <label>
             Description Template
-            <input type="text" name="description_template" placeholder="{mac} {ip}">
+            <input type="text" name="description_template" placeholder="{oui} {mac}">
+            <small class="field-help">Variables: {mac} {mac4} {mac6} {ip} {oui} {vlan} {interface} {hostname} {drop}</small>
         </label>
     </div>
     <div class="grid">
@@ -75,3 +127,14 @@
     </label>
     <button type="submit" style="width:auto;">Add Policy</button>
 </form>
+
+<script>
+function editPolicy(id) {
+    document.getElementById('policy-row-' + id).style.display = 'none';
+    document.getElementById('policy-edit-' + id).style.display = '';
+}
+function cancelEdit(id) {
+    document.getElementById('policy-row-' + id).style.display = '';
+    document.getElementById('policy-edit-' + id).style.display = 'none';
+}
+</script>

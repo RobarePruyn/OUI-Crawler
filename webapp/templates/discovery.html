@@ -2,7 +2,22 @@
 {% set active_page = "discovery" %}
 {% block title %}Discovery - OUI Port Mapper{% endblock %}
 {% block content %}
-<h1>OUI Discovery</h1>
+<h1>Network Scan</h1>
+
+<div class="scan-mode-toggle">
+    <label class="scan-mode">
+        <input type="radio" name="scan_mode" value="full" checked>
+        <span>Full Scan</span>
+    </label>
+    <label class="scan-mode">
+        <input type="radio" name="scan_mode" value="discovery">
+        <span>Discovery Only</span>
+    </label>
+    <label class="scan-mode">
+        <input type="radio" name="scan_mode" value="inventory">
+        <span>Inventory Only</span>
+    </label>
+</div>
 
 {% if venues %}
 <div class="form-section">
@@ -13,7 +28,7 @@
             <select id="venue-select">
                 <option value="">-- Manual entry --</option>
                 {% for v in venues %}
-                <option value="{{ v.id }}">{{ v.name }} ({{ v.core_ip }})</option>
+                <option value="{{ v.id }}" {% if selected_venue_id and v.id == selected_venue_id %}selected{% elif loop.first %}selected{% endif %}>{{ v.name }} ({{ v.core_ip }})</option>
                 {% endfor %}
             </select>
             <small class="field-help">Select a venue to use saved connection settings, credentials, and OUI registry</small>
@@ -59,10 +74,10 @@
             </label>
         </div>
 
-        <div class="form-section">
+        <div class="form-section" id="oui-fields">
             <h3>Discovery</h3>
             <div class="grid">
-                <label class="required">
+                <label class="required oui-required">
                     OUI Prefixes
                     <input type="text" name="oui_list" placeholder="00:0F:44, 90:AC:3F" required>
                     <small class="field-help">Comma-separated MAC prefixes to search for</small>
@@ -70,7 +85,7 @@
                 <label class="required">
                     Management Subnet
                     <input type="text" name="mgmt_subnet" placeholder="10.10.0.0/24" required>
-                    <small class="field-help">Restrict neighbor recursion to this subnet. Without this, the crawler will attempt SSH into every LLDP neighbor and hang.</small>
+                    <small class="field-help">Restrict neighbor recursion to this subnet</small>
                 </label>
             </div>
         </div>
@@ -85,7 +100,7 @@
                     </label>
                     <small class="field-help">Visit all CDP/LLDP neighbors from the core</small>
                 </div>
-                <label>
+                <label id="track-vlans-field">
                     Track VLANs
                     <input type="text" name="track_vlans" placeholder="21, 22, 23">
                     <small class="field-help">Monitor which of these VLANs are active per switch</small>
@@ -116,7 +131,7 @@
         </div>
     </div>
 
-    <button type="submit" id="btn-submit" class="btn-primary" disabled>Start Discovery</button>
+    <button type="submit" id="btn-submit" class="btn-primary" disabled>Start Scan</button>
 </form>
 
 <div id="result"></div>
@@ -124,17 +139,53 @@
 <script>
 const form = document.getElementById('discovery-form');
 const btn = document.getElementById('btn-submit');
-const required = form.querySelectorAll('[required]');
 const manualFields = document.getElementById('manual-fields');
+const ouiFields = document.getElementById('oui-fields');
+const trackVlansField = document.getElementById('track-vlans-field');
+const modeInputs = document.querySelectorAll('input[name="scan_mode"]');
+
+function getMode() {
+    return document.querySelector('input[name="scan_mode"]:checked').value;
+}
+
+function updateModeUI() {
+    const mode = getMode();
+    const isInventory = mode === 'inventory';
+
+    // Show/hide OUI-specific fields
+    ouiFields.style.display = isInventory ? 'none' : '';
+    trackVlansField.style.display = isInventory ? 'none' : '';
+
+    // Update button label
+    const labels = { full: 'Start Full Scan', discovery: 'Start Discovery', inventory: 'Start Inventory' };
+    btn.textContent = labels[mode];
+
+    // Toggle OUI required attribute
+    const ouiInput = form.querySelector('[name="oui_list"]');
+    if (isInventory) {
+        ouiInput.removeAttribute('required');
+        ouiInput.classList.remove('oui-required');
+    } else {
+        ouiInput.setAttribute('required', '');
+        ouiInput.classList.add('oui-required');
+    }
+
+    checkReady();
+}
+
+modeInputs.forEach(r => r.addEventListener('change', updateModeUI));
 
 function checkReady() {
+    const required = form.querySelectorAll('[required]');
     const ready = Array.from(required).every(f => {
         if (f.closest('#manual-fields') && manualFields.style.display === 'none') return true;
+        if (f.closest('#oui-fields') && ouiFields.style.display === 'none') return true;
         return f.value.trim() !== '';
     });
     btn.disabled = !ready;
 }
-required.forEach(f => f.addEventListener('input', checkReady));
+
+form.querySelectorAll('input, select').forEach(f => f.addEventListener('input', checkReady));
 checkReady();
 
 // Venue pre-fill
@@ -158,6 +209,7 @@ if (venueSelect) {
                     summary += ' &middot; OUIs: ' + (v.oui_list.length ? v.oui_list.join(', ') : '(none)');
                     if (v.fan_out) summary += ' &middot; Fan-out';
                     if (v.track_vlans.length) summary += ' &middot; Track VLANs: ' + v.track_vlans.join(', ');
+                    summary += ' &middot; Workers: ' + v.workers;
                     venueSummaryText.innerHTML = summary;
                     btn.disabled = false;
                 });
@@ -167,15 +219,21 @@ if (venueSelect) {
             checkReady();
         }
     });
+    if (venueSelect.value) {
+        venueSelect.dispatchEvent(new Event('change'));
+    }
 }
 
 form.addEventListener('submit', function(evt) {
     evt.preventDefault();
     btn.classList.add('loading');
     btn.disabled = true;
+    const mode = getMode();
 
     if (selectedVenueId) {
-        fetch('/api/venues/' + selectedVenueId + '/discover', {method: 'POST'})
+        // Venue-based scan
+        const url = '/api/venues/' + selectedVenueId + '/scan?mode=' + mode;
+        fetch(url, {method: 'POST'})
             .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); }); return r.json(); })
             .then(data => { window.location.href = '/jobs/' + data.id; })
             .catch(err => {
@@ -187,34 +245,59 @@ form.addEventListener('submit', function(evt) {
         return;
     }
 
+    // Manual entry
     const fd = new FormData(this);
-    const data = {
-        core_ip: fd.get('core_ip').trim(),
-        platform: fd.get('platform'),
-        username: fd.get('username').trim(),
-        password: fd.get('password'),
-        enable_secret: fd.get('enable_secret') || null,
-        oui_list: fd.get('oui_list').split(',').map(s => s.trim()).filter(Boolean),
-        fan_out: fd.has('fan_out'),
-        workers: parseInt(fd.get('workers')) || 10,
-        mac_threshold: parseInt(fd.get('mac_threshold')) || 1,
-        mgmt_subnet: fd.get('mgmt_subnet').trim() || null,
-        track_vlans: fd.get('track_vlans').trim() || null,
-    };
-
-    fetch('/api/discovery/start', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data),
-    })
-    .then(r => { if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
-    .then(job => { window.location.href = '/jobs/' + job.id; })
-    .catch(err => {
-        btn.classList.remove('loading');
-        checkReady();
-        document.getElementById('result').innerHTML =
-            '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
-    });
+    if (mode === 'inventory') {
+        const data = {
+            core_ip: fd.get('core_ip').trim(),
+            platform: fd.get('platform'),
+            username: fd.get('username').trim(),
+            password: fd.get('password'),
+            enable_secret: fd.get('enable_secret') || null,
+            workers: parseInt(fd.get('workers')) || 10,
+            mgmt_subnet: fd.get('mgmt_subnet').trim() || null,
+        };
+        fetch('/api/inventory/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        })
+        .then(r => { if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
+        .then(job => { window.location.href = '/jobs/' + job.id; })
+        .catch(err => {
+            btn.classList.remove('loading');
+            checkReady();
+            document.getElementById('result').innerHTML =
+                '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+        });
+    } else {
+        const data = {
+            core_ip: fd.get('core_ip').trim(),
+            platform: fd.get('platform'),
+            username: fd.get('username').trim(),
+            password: fd.get('password'),
+            enable_secret: fd.get('enable_secret') || null,
+            oui_list: fd.get('oui_list').split(',').map(s => s.trim()).filter(Boolean),
+            fan_out: fd.has('fan_out'),
+            workers: parseInt(fd.get('workers')) || 10,
+            mac_threshold: parseInt(fd.get('mac_threshold')) || 1,
+            mgmt_subnet: fd.get('mgmt_subnet').trim() || null,
+            track_vlans: fd.get('track_vlans').trim() || null,
+        };
+        fetch('/api/discovery/start', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(data),
+        })
+        .then(r => { if (!r.ok) throw new Error('Server returned ' + r.status); return r.json(); })
+        .then(job => { window.location.href = '/jobs/' + job.id; })
+        .catch(err => {
+            btn.classList.remove('loading');
+            checkReady();
+            document.getElementById('result').innerHTML =
+                '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+        });
+    }
 });
 </script>
 {% endblock %}

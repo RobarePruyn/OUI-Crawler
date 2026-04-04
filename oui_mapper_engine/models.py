@@ -6,6 +6,17 @@ from typing import Optional, Any
 
 
 @dataclass
+class PortConfig:
+    """Port-level config collected from show running-config."""
+    has_portfast: bool = False
+    has_bpdu_guard: bool = False
+    has_storm_control: bool = False
+    storm_control_level: str = ""
+    description: str = ""
+    civic_location: str = ""
+
+
+@dataclass
 class DeviceRecord:
     """One discovered device pinned to a specific switch port."""
     switch_hostname: str
@@ -19,6 +30,7 @@ class DeviceRecord:
     discovery_depth: int = 0
     notes: str = ""
     switch_tracked_vlan: str = ""
+    port_config: Optional[PortConfig] = None
 
 
 @dataclass

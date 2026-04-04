@@ -111,12 +111,11 @@
 <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
     <button class="outline" onclick="venueDiscover()">Run Discovery</button>
     <button class="outline secondary" onclick="venueInventory()">Run Inventory</button>
-    <a href="/venues/{{ venue.id }}/compliance" class="outline secondary" role="button" style="width:auto;">Compliance</a>
 </div>
 <div id="venue-action-result"></div>
 
 {# ── Tabs ── #}
-<nav>
+<nav class="tab-scroll">
     <ul>
         <li><a href="#" class="tab-link active" data-tab="tab-switches">Switches</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-timeline">Timeline</a></li>
@@ -124,6 +123,7 @@
         <li><a href="#" class="tab-link" data-tab="tab-vlans">VLANs</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-oui">OUI Registry</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-policies">Port Policies</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-compliance">Compliance</a></li>
     </ul>
 </nav>
 
@@ -169,6 +169,13 @@
 <div id="tab-policies" class="tab-panel" style="display:none;">
     <div id="port-policies" data-src="/partials/port-policies/{{ venue.id }}">
         <article aria-busy="true">Loading port policies...</article>
+    </div>
+</div>
+
+<!-- Compliance Tab -->
+<div id="tab-compliance" class="tab-panel" style="display:none;">
+    <div id="venue-compliance" data-src="/partials/compliance/{{ venue.id }}">
+        <article aria-busy="true">Loading compliance...</article>
     </div>
 </div>
 
@@ -318,7 +325,10 @@ function venueDiscover() {
     el.innerHTML = '<article aria-busy="true">Starting discovery...</article>';
     fetch('/api/venues/{{ venue.id }}/discover', {method: 'POST'})
         .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); }); return r.json(); })
-        .then(data => { window.location.href = '/jobs/' + data.id; })
+        .then(data => {
+            // Load inline progress banner instead of navigating away
+            htmx.ajax('GET', '/partials/venue-job/' + data.id, {target: '#venue-action-result', swap: 'innerHTML'});
+        })
         .catch(err => { el.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>'; });
 }
 
@@ -327,7 +337,10 @@ function venueInventory() {
     el.innerHTML = '<article aria-busy="true">Starting inventory...</article>';
     fetch('/api/venues/{{ venue.id }}/inventory', {method: 'POST'})
         .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); }); return r.json(); })
-        .then(data => { window.location.href = '/jobs/' + data.id; })
+        .then(data => {
+            // Load inline progress banner instead of navigating away
+            htmx.ajax('GET', '/partials/venue-job/' + data.id, {target: '#venue-action-result', swap: 'innerHTML'});
+        })
         .catch(err => { el.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>'; });
 }
 </script>

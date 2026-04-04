@@ -1,35 +1,29 @@
-{% extends "base.html" %}
-{% set active_page = "venues" %}
-{% block title %}Compliance - {{ venue.name }} - OUI Port Mapper{% endblock %}
-{% block content %}
-<h1>Compliance: {{ venue.name }}</h1>
-<p>Based on persistent port state &mdash; last updated from discovery crawls.</p>
-
-<div class="stat-row">
-    <div class="stat-card">
-        <div class="stat-value" style="color:var(--pico-ins-color);">{{ ok_count }}</div>
-        <div class="stat-label">Ports Compliant</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value" style="color:var(--pico-mark-background-color, orange);">{{ warn_count }}</div>
-        <div class="stat-label">VLAN Issues</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value" style="color:var(--pico-muted-color);">{{ config_count }}</div>
-        <div class="stat-label">Config Drift</div>
-    </div>
+{# Compliance tab — rendered as a partial inside venue_detail.html #}
+<div style="display:flex;align-items:center;gap:1rem;margin-bottom:1rem;">
+    <h3 style="margin-bottom:0;">Compliance</h3>
+    <button class="outline" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="runComplianceCheck()">Re-run Check</button>
 </div>
 
 {% if not results %}
-<p>No compliance data. Run a discovery crawl to populate port state, then
-<button class="outline" style="width:auto;" onclick="runCheck()">Run Compliance Check</button></p>
+<p>No compliance data. Run a discovery crawl to populate port state, then re-run the compliance check.</p>
 {% else %}
 
-<div style="margin-bottom:1rem;">
-    <button class="outline" style="width:auto;" onclick="runCheck()">Re-run Compliance Check</button>
+<div class="grid">
+    <article>
+        <header>VLAN OK</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-ins-color);">{{ ok_count }}</p>
+    </article>
+    <article>
+        <header>VLAN Issues</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-mark-background-color, orange);">{{ warn_count }}</p>
+    </article>
+    <article>
+        <header>Port Config</header>
+        <p style="font-size:2rem;font-weight:700;color:var(--pico-muted-color);">{{ config_count }}</p>
+    </article>
 </div>
 
-{# Split violations into wrong-VLAN (actionable), wrong-subnet (informational), port-config (separate) #}
+{# Split violations into wrong-VLAN (actionable), wrong-subnet (informational), port-config (separate section) #}
 {% set vlan_results = results | selectattr("check_type", "eq", "vlan_compliance") | list %}
 {% set violations = vlan_results | selectattr("severity", "ne", "ok") | list %}
 {% set vlan_violations = [] %}
@@ -43,15 +37,15 @@
 {% endfor %}
 
 {% if vlan_violations %}
-<h2>Wrong VLAN ({{ vlan_violations | length }})</h2>
+<h4>Wrong VLAN ({{ vlan_violations | length }})</h4>
 <p style="font-size:0.85rem;color:var(--pico-muted-color);margin-top:-0.5rem;">
     These ports are on the wrong VLAN. Use Push Selected to reassign.
 </p>
 
 <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">
-    <button class="outline" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="selectAll(true)">Select All</button>
-    <button class="outline secondary" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="selectAll(false)">Select None</button>
-    <button id="btn-push" style="width:auto;" onclick="pushSelected()">Push Selected</button>
+    <button class="outline" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="compSelectAll(true)">Select All</button>
+    <button class="outline secondary" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="compSelectAll(false)">Select None</button>
+    <button id="btn-push" style="width:auto;" onclick="compPushSelected()">Push Selected</button>
     <span id="push-status" style="font-size:0.85rem;"></span>
 </div>
 
@@ -59,7 +53,7 @@
 <table>
     <thead>
         <tr>
-            <th style="width:2rem;"><input type="checkbox" id="chk-all" onchange="selectAll(this.checked)"></th>
+            <th style="width:2rem;"><input type="checkbox" id="chk-all" onchange="compSelectAll(this.checked)"></th>
             <th>Switch</th>
             <th>Interface</th>
             <th>MAC</th>
@@ -93,9 +87,10 @@
 {% endif %}
 
 {% if subnet_violations %}
-<h2>Wrong Subnet ({{ subnet_violations | length }})</h2>
+<h4>Wrong Subnet ({{ subnet_violations | length }})</h4>
 <p style="font-size:0.85rem;color:var(--pico-muted-color);margin-top:-0.5rem;">
-    Correct VLAN but device IP outside expected subnet. Likely a DHCP scope or static IP issue &mdash; VLAN push will not resolve.
+    These ports are on the correct VLAN but the device IP is outside the expected subnet.
+    This typically indicates a DHCP scope misconfiguration or static IP issue &mdash; a VLAN push will not resolve it.
 </p>
 
 <figure>
@@ -128,19 +123,19 @@
 <p style="color:var(--pico-ins-color);">All VLAN assignments are compliant.</p>
 {% endif %}
 
-{# Port config violations #}
+{# Port config violations — ports with a policy but unverified config #}
 {% set config_violations = results | selectattr("check_type", "eq", "port_config") | selectattr("severity", "ne", "ok") | list %}
 {% if config_violations %}
-<h2>Port Config ({{ config_violations | length }})</h2>
+<h4>Port Config ({{ config_violations | length }})</h4>
 <p style="font-size:0.85rem;color:var(--pico-muted-color);margin-top:-0.5rem;">
     These ports deviate from the port policy for their VLAN.
     Push to apply standard port hardening (portfast, BPDU guard, storm control, description).
 </p>
 
 <div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;align-items:center;">
-    <button class="outline" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="configSelectAll(true)">Select All</button>
-    <button class="outline secondary" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="configSelectAll(false)">Select None</button>
-    <button id="btn-config-push" style="width:auto;" onclick="pushConfigSelected()">Push Port Config</button>
+    <button class="outline" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="compConfigSelectAll(true)">Select All</button>
+    <button class="outline secondary" style="width:auto;padding:0.2rem 0.6rem;font-size:0.8rem;" onclick="compConfigSelectAll(false)">Select None</button>
+    <button id="btn-config-push" style="width:auto;" onclick="compConfigPushSelected()">Push Port Config</button>
     <span id="config-push-status" style="font-size:0.85rem;"></span>
 </div>
 
@@ -148,7 +143,7 @@
 <table>
     <thead>
         <tr>
-            <th style="width:2rem;"><input type="checkbox" id="chk-config-all" onchange="configSelectAll(this.checked)"></th>
+            <th style="width:2rem;"><input type="checkbox" id="chk-config-all" onchange="compConfigSelectAll(this.checked)"></th>
             <th>Switch</th>
             <th>Interface</th>
             <th>MAC</th>
@@ -228,20 +223,22 @@
 <div id="push-summary" style="display:none;margin-top:1rem;"></div>
 
 <script>
-function runCheck() {
+function runComplianceCheck() {
     fetch('/api/venues/{{ venue.id }}/compliance', {method: 'POST'})
         .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
-        .then(() => { location.reload(); })
+        .then(() => {
+            htmx.ajax('GET', '/partials/compliance/{{ venue.id }}', {target: '#venue-compliance', swap: 'innerHTML'});
+        })
         .catch(err => { alert('Error: ' + err.message); });
 }
 
-function selectAll(checked) {
+function compSelectAll(checked) {
     document.querySelectorAll('.violation-chk').forEach(cb => { cb.checked = checked; });
     const chkAll = document.getElementById('chk-all');
     if (chkAll) chkAll.checked = checked;
 }
 
-function configSelectAll(checked) {
+function compConfigSelectAll(checked) {
     document.querySelectorAll('.config-chk').forEach(cb => { cb.checked = checked; });
     const chkAll = document.getElementById('chk-config-all');
     if (chkAll) chkAll.checked = checked;
@@ -314,11 +311,15 @@ function _pollRediscovery(jobId, statusEl) {
                 if (data.status === 'completed') {
                     clearInterval(poll);
                     statusEl.innerHTML = ' Re-discovery complete. Running compliance check...';
+                    // Auto-run compliance check
                     fetch('/api/venues/{{ venue.id }}/compliance', {method: 'POST'})
                         .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
-                        .then(() => { location.reload(); })
+                        .then(() => {
+                            statusEl.innerHTML = ' Compliance refreshed.';
+                            htmx.ajax('GET', '/partials/compliance/{{ venue.id }}', {target: '#venue-compliance', swap: 'innerHTML'});
+                        })
                         .catch(() => {
-                            statusEl.innerHTML = ' Re-discovery done. <a href="javascript:void(0)" onclick="runCheck()">Re-run compliance</a>';
+                            statusEl.innerHTML = ' Re-discovery done. <a href="javascript:void(0)" onclick="runComplianceCheck()">Re-run compliance</a>';
                         });
                 } else if (data.status === 'failed') {
                     clearInterval(poll);
@@ -333,7 +334,7 @@ function _pollRediscovery(jobId, statusEl) {
     }, 2000);
 }
 
-async function pushSelected() {
+async function compPushSelected() {
     const checks = document.querySelectorAll('.violation-chk:checked');
     if (!checks.length) { alert('No violations selected.'); return; }
 
@@ -378,7 +379,7 @@ async function pushSelected() {
     btn.disabled = false;
 }
 
-async function pushConfigSelected() {
+async function compConfigPushSelected() {
     const checks = document.querySelectorAll('.config-chk:checked');
     if (!checks.length) { alert('No ports selected.'); return; }
 
@@ -423,6 +424,3 @@ async function pushConfigSelected() {
     btn.disabled = false;
 }
 </script>
-
-<p><a href="/venues/{{ venue.id }}">&larr; Back to Venue</a></p>
-{% endblock %}

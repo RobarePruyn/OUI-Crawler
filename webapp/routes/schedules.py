@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from ..auth import User, get_current_user
+from ..auth import User, check_venue_access, get_current_user
 from ..database import get_db
 from ..db_models import Schedule, Venue
 from ..scheduler import sync_schedule
 
-router = APIRouter(tags=["schedules"])
+router = APIRouter(tags=["schedules"], dependencies=[Depends(check_venue_access)])
 
 
 @router.post("/api/venues/{venue_id}/schedules", response_class=HTMLResponse)

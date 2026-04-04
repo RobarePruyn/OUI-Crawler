@@ -4,7 +4,7 @@
 {% block content %}
 <h1>Settings</h1>
 
-{% if user.role == "admin" %}
+{% if user.role == "super_admin" %}
 <h2>Application</h2>
 <form method="post" action="/settings/timezone">
     <div class="grid">
@@ -49,7 +49,7 @@
 </article>
 {% endif %}
 
-{% if user.role == "admin" %}
+{% if user.role == "super_admin" %}
 <hr>
 <h2>User Management</h2>
 
@@ -66,11 +66,25 @@
         </label>
         <label>
             Role
-            <select name="role">
-                <option value="admin">Admin</option>
-                <option value="operator" selected>Operator</option>
+            <select name="role" id="create-role-select" onchange="toggleVenueCheckboxes()">
+                <option value="super_admin">Super Admin</option>
+                <option value="site_admin" selected>Site Admin</option>
             </select>
         </label>
+    </div>
+    <div id="create-venue-checkboxes" class="form-section" style="margin-top:0.5rem;">
+        <h3>Venue Access</h3>
+        {% if all_venues %}
+        <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1.5rem;">
+            {% for v in all_venues %}
+            <label style="margin:0;">
+                <input type="checkbox" name="venue_ids" value="{{ v.id }}"> {{ v.name }}
+            </label>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted" style="margin:0;">No venues configured yet.</p>
+        {% endif %}
     </div>
     <button type="submit">Create User</button>
 </form>
@@ -82,6 +96,7 @@
         <tr>
             <th>Username</th>
             <th>Role</th>
+            <th>Venues</th>
             <th>Created</th>
             <th></th>
         </tr>
@@ -90,20 +105,63 @@
         {% for u in users %}
         <tr>
             <td>{{ u.username }}{% if u.id == user.id %} <small>(you)</small>{% endif %}</td>
-            <td>{{ u.role }}</td>
-            <td>{{ u.created_at | localtime }}</td>
+            <td>{{ u.role | replace("_", " ") | title }}</td>
             <td>
+                {% if u.role == "super_admin" %}
+                <span class="text-muted">All</span>
+                {% elif u.venues %}
+                {{ u.venues | map(attribute='name') | join(', ') }}
+                {% else %}
+                <span class="text-muted">None</span>
+                {% endif %}
+            </td>
+            <td class="nowrap">{{ u.created_at | localtime }}</td>
+            <td class="nowrap">
                 {% if u.id != user.id %}
-                <form method="post" action="/settings/delete-user/{{ u.id }}" style="margin:0;"
+                {% if u.role == "site_admin" %}
+                <a href="#" onclick="toggleVenueEdit({{ u.id }});return false;" style="font-size:0.8rem;">Edit</a>
+                &middot;
+                {% endif %}
+                <form method="post" action="/settings/delete-user/{{ u.id }}" style="margin:0;display:inline;"
                       onsubmit="return confirm('Delete user {{ u.username }}?');">
                     <button type="submit" class="outline secondary" style="padding:0.25rem 0.5rem;width:auto;">Delete</button>
                 </form>
                 {% endif %}
             </td>
         </tr>
+        {% if u.role == "site_admin" and u.id != user.id %}
+        <tr id="venue-edit-{{ u.id }}" style="display:none;">
+            <td colspan="5">
+                <form method="post" action="/settings/user-venues/{{ u.id }}" style="margin:0;">
+                    <div style="display:flex;flex-wrap:wrap;gap:0.5rem 1.5rem;align-items:center;">
+                        {% for v in all_venues %}
+                        <label style="margin:0;">
+                            <input type="checkbox" name="venue_ids" value="{{ v.id }}"
+                                   {% if v in u.venues %}checked{% endif %}> {{ v.name }}
+                        </label>
+                        {% endfor %}
+                        <button type="submit" style="width:auto;padding:0.25rem 0.75rem;margin:0;">Save</button>
+                    </div>
+                </form>
+            </td>
+        </tr>
+        {% endif %}
         {% endfor %}
     </tbody>
 </table>
 </figure>
+
+<script>
+function toggleVenueCheckboxes() {
+    const role = document.getElementById('create-role-select').value;
+    document.getElementById('create-venue-checkboxes').style.display = role === 'site_admin' ? '' : 'none';
+}
+toggleVenueCheckboxes();
+
+function toggleVenueEdit(userId) {
+    const row = document.getElementById('venue-edit-' + userId);
+    row.style.display = row.style.display === 'none' ? '' : 'none';
+}
+</script>
 {% endif %}
 {% endblock %}

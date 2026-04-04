@@ -25,14 +25,47 @@ async def lifespan(app: FastAPI):
     load_oui_database()
 
     db = SessionLocal()
+
+    # Schema migrations for existing databases
+    from sqlalchemy import inspect as sa_inspect, text
+    inspector = sa_inspect(db.bind)
+    venue_port_cols = {c["name"] for c in inspector.get_columns("venue_ports")}
+    if "last_config_error" not in venue_port_cols:
+        db.execute(text("ALTER TABLE venue_ports ADD COLUMN last_config_error TEXT"))
+        db.commit()
+        print("  Added venue_ports.last_config_error column")
+
+    # Mark any jobs left in running/pending as failed — their threads are gone
+    from .db_models import Job
+    from datetime import datetime, timezone
+    stale = db.query(Job).filter(Job.status.in_(["running", "pending"])).all()
+    for j in stale:
+        j.status = "failed"
+        j.error_message = "Stale: app restarted while job was in progress"
+        j.completed_at = datetime.now(timezone.utc)
+    if stale:
+        db.commit()
+        print(f"  Cleaned up {len(stale)} stale job(s)")
+
+    # Migrate legacy "admin" role to "super_admin"
+    from .db_models import User as UserModel
+    legacy = db.query(UserModel).filter(UserModel.role == "admin").all()
+    for u in legacy:
+        u.role = "super_admin"
+    if legacy:
+        db.commit()
+        print(f"  Migrated {len(legacy)} user(s) from 'admin' to 'super_admin'")
+
     password = ensure_default_admin(db)
     if password:
+        import sys
         print(f"\n{'='*50}")
         print(f"  Default admin account created")
         print(f"  Username: admin")
         print(f"  Password: {password}")
         print(f"  Change this after first login!")
         print(f"{'='*50}\n")
+        sys.stdout.flush()
     from .app_settings import load_timezone
     load_timezone(db)
 
@@ -48,7 +81,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="OUI Port Mapper", version="4.0", lifespan=lifespan)
+    app = FastAPI(title="OUI Port Mapper", version="5.0", lifespan=lifespan)
 
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
@@ -59,7 +92,7 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # Register routes
-    from .routes import discovery, inventory, actions, history, venues, oui_registry, schedules, compliance, lookup, vlans, switches, pages
+    from .routes import discovery, inventory, actions, history, venues, oui_registry, schedules, compliance, lookup, vlans, switches, exports, pages
     app.include_router(discovery.router)
     app.include_router(inventory.router)
     app.include_router(actions.router)
@@ -71,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(lookup.router)
     app.include_router(vlans.router)
     app.include_router(switches.router)
+    app.include_router(exports.router)
     app.include_router(pages.router)
 
     # Redirect unauthenticated HTML requests to login page

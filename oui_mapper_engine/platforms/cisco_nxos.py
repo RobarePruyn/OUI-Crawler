@@ -1,6 +1,6 @@
 """Cisco NX-OS platform implementation."""
 import re
-from ..models import MacEntry
+from ..models import MacEntry, PortConfig
 from .cisco_ios import CiscoIOSPlatform
 
 
@@ -29,6 +29,68 @@ class CiscoNXOSPlatform(CiscoIOSPlatform):
             "spanning-tree port type edge",
             "spanning-tree bpduguard enable",
         ]
+
+    def get_port_config_commands(
+        self,
+        interface: str,
+        *,
+        bpdu_guard: bool = True,
+        portfast: bool = True,
+        storm_control: bool = False,
+        storm_control_level: str = "1.00",
+        description: str | None = None,
+    ) -> list[str]:
+        """Apply port policy config on Cisco NX-OS."""
+        cmds = [f"interface {interface}"]
+        if portfast:
+            cmds.append("spanning-tree port type edge")
+        if bpdu_guard:
+            cmds.append("spanning-tree bpduguard enable")
+        if storm_control:
+            cmds.append(f"storm-control broadcast level {storm_control_level}")
+            cmds.append(f"storm-control multicast level {storm_control_level}")
+        if description:
+            cmds.append(f"description {description}")
+        return cmds
+
+    def parse_interface_configs(self, raw_output: str) -> dict[str, PortConfig]:
+        """Parse NX-OS interface configs. NX-OS uses 'port type edge' instead of portfast."""
+        configs: dict[str, PortConfig] = {}
+        blocks = re.split(r'(?=^interface\s)', raw_output, flags=re.MULTILINE)
+        for block in blocks:
+            header = re.match(r'interface\s+(\S+)', block)
+            if not header:
+                continue
+            intf = header.group(1)
+            pc = PortConfig()
+            if re.search(r'spanning-tree port type edge', block):
+                pc.has_portfast = True
+            if re.search(r'spanning-tree bpduguard enable', block):
+                pc.has_bpdu_guard = True
+            storm = re.search(r'storm-control broadcast level\s+([\d.]+)', block)
+            if storm:
+                pc.has_storm_control = True
+                pc.storm_control_level = storm.group(1)
+            desc = re.search(r'^\s+description\s+(.+)', block, re.MULTILINE)
+            if desc:
+                pc.description = desc.group(1).strip()
+            civic = re.search(r'location civic-location-id\s+(\S+)', block)
+            if civic:
+                pc.civic_location = civic.group(1)
+            configs[intf] = pc
+            norm = self.normalize_interface(intf)
+            if norm != intf:
+                configs[norm] = pc
+        return configs
+
+    def get_civic_location_command(self) -> str:
+        return "show running-config | section ^location"
+
+    def parse_civic_locations(self, raw_output: str) -> dict[str, str]:
+        """Parse NX-OS civic location definitions (same format as IOS)."""
+        # Delegate to IOS implementation since format is identical
+        from .cisco_ios import CiscoIOSPlatform
+        return CiscoIOSPlatform.parse_civic_locations(self, raw_output)
 
     def get_svi_config_command(self) -> str:
         return 'show running-config | section "interface Vlan"'

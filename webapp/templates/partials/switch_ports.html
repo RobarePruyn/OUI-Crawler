@@ -1,7 +1,17 @@
 {% if ports %}
-<table style="margin-bottom:0;">
+<div style="display:flex;gap:0.5rem;margin-bottom:0.5rem;">
+    <button class="outline port-filter active" data-filter="all" style="padding:0.15rem 0.5rem;width:auto;font-size:0.75rem;">All ({{ ports | length }})</button>
+    <button class="outline port-filter" data-filter="matched" style="padding:0.15rem 0.5rem;width:auto;font-size:0.75rem;">OUI Matched ({{ ports | selectattr("matched_oui") | list | length }})</button>
+    <button class="outline port-filter" data-filter="issues" style="padding:0.15rem 0.5rem;width:auto;font-size:0.75rem;">Issues ({{ port_compliance.values() | select("ne", "ok") | list | length }})</button>
+</div>
+<div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.5rem;">
+    <input type="search" placeholder="Filter ports..." oninput="filterTable(this, 'port-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
+    <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;" onclick="exportTableCSV('port-table', 'ports.csv')">CSV</button>
+</div>
+<table id="port-table" style="margin-bottom:0;">
     <thead>
         <tr>
+            <th></th>
             <th>Interface</th>
             <th>MAC</th>
             <th>IP</th>
@@ -14,7 +24,21 @@
     </thead>
     <tbody>
         {% for p in ports %}
-        <tr id="port-row-{{ p.id }}">
+        <tr id="port-row-{{ p.id }}"
+            data-has-oui="{{ '1' if p.matched_oui else '0' }}"
+            data-has-issue="{{ '1' if port_compliance.get(p.interface, 'ok') != 'ok' else '0' }}">
+            <td>
+                {% set sev = port_compliance.get(p.interface) %}
+                {% if sev == "ok" %}
+                <span class="compliance-dot compliance-ok" title="Compliant"></span>
+                {% elif sev == "warning" %}
+                <span class="compliance-dot compliance-warn" title="{{ port_compliance_detail.get(p.interface, 'Violation') }}"></span>
+                {% elif sev %}
+                <span class="compliance-dot compliance-err" title="{{ port_compliance_detail.get(p.interface, 'Issue') }}"></span>
+                {% else %}
+                <span class="compliance-dot compliance-none" title="Not checked"></span>
+                {% endif %}
+            </td>
             <td><strong>{{ p.interface }}</strong></td>
             <td><code>{{ p.mac_address or "-" }}</code></td>
             <td>{{ p.ip_address or "-" }}</td>
@@ -78,13 +102,33 @@ function portAction(portId, venueId, action) {
                 document.getElementById('port-vlan-' + portId).textContent = body.vlan;
             }
         } else {
-            resultEl.innerHTML = '<span style="color:var(--pico-del-color);">' + data.message + '</span>';
+            let msg = '<span style="color:var(--pico-del-color);">' + data.message + '</span>';
+            if (data.warnings && data.warnings.length) {
+                msg += '<details style="margin-top:0.2rem;font-size:0.75rem;"><summary style="color:var(--pico-del-color);cursor:pointer;">'
+                    + data.warnings.length + ' warning(s)</summary><div style="white-space:pre-line;padding:0.25rem;">'
+                    + data.warnings.join('\n') + '</div></details>';
+            }
+            resultEl.innerHTML = msg;
         }
     })
     .catch(err => {
         resultEl.innerHTML = '<span style="color:var(--pico-del-color);">' + err.message + '</span>';
     });
 }
+
+// Port filter buttons
+document.querySelectorAll('.port-filter').forEach(btn => {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.port-filter').forEach(b => b.classList.remove('active'));
+        this.classList.add('active');
+        const filter = this.dataset.filter;
+        document.querySelectorAll('#port-table tbody tr').forEach(row => {
+            if (filter === 'all') { row.style.display = ''; }
+            else if (filter === 'matched') { row.style.display = row.dataset.hasOui === '1' ? '' : 'none'; }
+            else if (filter === 'issues') { row.style.display = row.dataset.hasIssue === '1' ? '' : 'none'; }
+        });
+    });
+});
 </script>
 {% else %}
 <p style="color:var(--pico-muted-color);margin:0;">No ports discovered on this switch. Run a discovery crawl to populate.</p>

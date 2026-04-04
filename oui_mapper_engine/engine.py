@@ -57,6 +57,7 @@ class OUIPortMapper:
         mac_threshold: int = 1,
         mgmt_subnet: str = "",
         track_vlans: Optional[list[str]] = None,
+        vlan_subnets: Optional[dict[str, str]] = None,
         discover_vlans: bool = False,
         save_config: bool = False,
         verbose: bool = False,
@@ -89,8 +90,20 @@ class OUIPortMapper:
         # Normalize OUIs for prefix matching
         self.normalized_oui_list = [normalize_oui_prefix(o) for o in oui_list]
 
-        # Global MAC→IP lookup, merged from ARP tables across all switches
-        self.mac_to_ip_lookup: dict[str, str] = {}
+        # Global MAC→IP lookup, merged from ARP tables across all switches.
+        # Stores ALL observed IPs per MAC for SVI-aware resolution.
+        self.mac_to_ip_lookup: dict[str, list[str]] = {}
+
+        # VLAN→subnet mapping from VenueVlan SVI config (e.g., "21" → "10.2.1.0/24").
+        # Used by resolve_ip() to pick the correct ARP entry when multiple
+        # switches report different IPs for the same MAC.
+        self.vlan_subnets: dict[str, ipaddress.IPv4Network] = {}
+        if vlan_subnets:
+            for vid, cidr in vlan_subnets.items():
+                try:
+                    self.vlan_subnets[str(vid)] = ipaddress.ip_network(cidr, strict=False)
+                except ValueError:
+                    pass
 
         # Discovery results
         self.discovered_records: list[DeviceRecord] = []
@@ -137,6 +150,38 @@ class OUIPortMapper:
             self.log = logging.getLogger("oui_mapper")
             if verbose and not self.log.handlers:
                 self.log.setLevel(logging.DEBUG)
+
+    # ------------------------------------------------------------------
+    # SVI-aware ARP resolution
+    # ------------------------------------------------------------------
+
+    def resolve_ip(self, mac: str, vlan: str = None) -> str:
+        """
+        Resolve a MAC address to an IP using SVI-aware logic.
+
+        When multiple ARP entries exist for the same MAC (common when both
+        the core and access switches have entries), prefer the IP whose
+        subnet matches the expected SVI for the device's VLAN. Falls back
+        to the first recorded IP when no VLAN subnet info is available.
+        """
+        candidates = self.mac_to_ip_lookup.get(mac)
+        if not candidates:
+            return "unknown"
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # If we know the subnet for this VLAN, pick the matching IP
+        if vlan and str(vlan) in self.vlan_subnets:
+            subnet = self.vlan_subnets[str(vlan)]
+            for ip in candidates:
+                try:
+                    if ipaddress.ip_address(ip) in subnet:
+                        return ip
+                except ValueError:
+                    continue
+
+        # Fallback: first writer wins (core switch, visited first)
+        return candidates[0]
 
     # ------------------------------------------------------------------
     # Progress event helper
@@ -466,11 +511,19 @@ class OUIPortMapper:
 
         try:
             # --- Pull ARP table → merge into global MAC→IP lookup ---
+            # Store ALL ARP entries per MAC. The resolve_ip() method
+            # picks the correct one using VLAN→subnet matching (SVI-aware).
             self.log.info(f"{indent}  Pulling ARP table...")
             arp_output = connection.send_command(platform.get_arp_command())
             local_arp = platform.parse_arp_table(arp_output)
-            self.mac_to_ip_lookup.update(local_arp)
-            self.log.info(f"{indent}  ARP entries: {len(local_arp)}")
+            new_entries = 0
+            for mac, ip in local_arp.items():
+                if mac not in self.mac_to_ip_lookup:
+                    self.mac_to_ip_lookup[mac] = [ip]
+                    new_entries += 1
+                elif ip not in self.mac_to_ip_lookup[mac]:
+                    self.mac_to_ip_lookup[mac].append(ip)
+            self.log.info(f"{indent}  ARP entries: {len(local_arp)} ({new_entries} new MACs)")
 
             # --- Pull MAC address table → filter by OUI ---
             self.log.info(f"{indent}  Pulling MAC address table...")
@@ -584,6 +637,47 @@ class OUIPortMapper:
                                 )
                                 break  # one neighbor is enough
 
+            # --- Pull interface configs (port hardening state) ---
+            intf_config_cmd = platform.get_all_interface_configs_command()
+            intf_configs: dict = {}
+            if intf_config_cmd:
+                try:
+                    intf_config_output = connection.send_command(
+                        intf_config_cmd, read_timeout=60,
+                    )
+                    intf_configs = platform.parse_interface_configs(
+                        intf_config_output
+                    )
+                    self.log.info(
+                        f"{indent}  Interface configs parsed: "
+                        f"{len(intf_configs)}"
+                    )
+                except Exception as exc:
+                    self.log.warning(
+                        f"{indent}  Failed to collect interface configs: "
+                        f"{exc}"
+                    )
+
+            # --- Pull civic location definitions and enrich ---
+            civic_cmd = platform.get_civic_location_command()
+            if civic_cmd and intf_configs:
+                try:
+                    civic_output = connection.send_command(
+                        civic_cmd, read_timeout=30,
+                    )
+                    civic_map = platform.parse_civic_locations(civic_output)
+                    if civic_map:
+                        platform.enrich_civic_locations(intf_configs, civic_map)
+                        self.log.info(
+                            f"{indent}  Civic locations resolved: "
+                            f"{len(civic_map)}"
+                        )
+                except Exception as exc:
+                    self.log.warning(
+                        f"{indent}  Failed to collect civic locations: "
+                        f"{exc}"
+                    )
+
             # --- Build per-port MAC count (multi-MAC heuristic) ---
             # Count ALL MACs per port (not just OUI matches) to detect
             # trunk/uplink ports vs. access ports
@@ -670,8 +764,8 @@ class OUIPortMapper:
                     # Likely an unmanaged switch, hub, or CDP/LLDP
                     # disabled on that link. We can't determine a
                     # management IP to recurse into, so record here.
-                    ip_addr = self.mac_to_ip_lookup.get(
-                        entry.mac_address, "unknown"
+                    ip_addr = self.resolve_ip(
+                        entry.mac_address, entry.vlan
                     )
                     self.discovered_records.append(DeviceRecord(
                         switch_hostname=hostname,
@@ -688,6 +782,7 @@ class OUIPortMapper:
                             f"no CDP/LLDP neighbor"
                         ),
                         switch_tracked_vlan=tracked_vlan_str,
+                        port_config=intf_configs.get(norm_port) or intf_configs.get(entry.interface),
                     ))
                     # NOTE: Do NOT add to resolved_macs here. Multi-MAC
                     # uplink records are "best effort" — if the same MAC
@@ -703,8 +798,8 @@ class OUIPortMapper:
 
                 else:
                     # --- Access port: endpoint found ---
-                    ip_addr = self.mac_to_ip_lookup.get(
-                        entry.mac_address, "unknown"
+                    ip_addr = self.resolve_ip(
+                        entry.mac_address, entry.vlan
                     )
                     self.discovered_records.append(DeviceRecord(
                         switch_hostname=hostname,
@@ -717,6 +812,7 @@ class OUIPortMapper:
                         platform=platform.platform_name,
                         discovery_depth=current_depth,
                         switch_tracked_vlan=tracked_vlan_str,
+                        port_config=intf_configs.get(norm_port) or intf_configs.get(entry.interface),
                     ))
                     self.resolved_macs.add(entry.mac_address)
                     self.log.info(
@@ -824,8 +920,8 @@ class OUIPortMapper:
                 for entry, matched_oui in mac_group:
                     if entry.mac_address in self.resolved_macs:
                         continue
-                    ip_addr = self.mac_to_ip_lookup.get(
-                        entry.mac_address, "unknown"
+                    ip_addr = self.resolve_ip(
+                        entry.mac_address, entry.vlan
                     )
                     if connection_failed:
                         # SSH failed → endpoint, not a switch.
@@ -879,8 +975,8 @@ class OUIPortMapper:
                     for entry, matched_oui in mac_group:
                         if entry.mac_address in self.resolved_macs:
                             continue
-                        ip_addr = self.mac_to_ip_lookup.get(
-                            entry.mac_address, "unknown"
+                        ip_addr = self.resolve_ip(
+                            entry.mac_address, entry.vlan
                         )
                         self.discovered_records.append(DeviceRecord(
                             switch_hostname=hostname,
@@ -908,8 +1004,8 @@ class OUIPortMapper:
                     for entry, matched_oui in mac_group:
                         if entry.mac_address in self.resolved_macs:
                             continue
-                        ip_addr = self.mac_to_ip_lookup.get(
-                            entry.mac_address, "unknown"
+                        ip_addr = self.resolve_ip(
+                            entry.mac_address, entry.vlan
                         )
                         self.discovered_records.append(DeviceRecord(
                             switch_hostname=hostname,
@@ -980,8 +1076,8 @@ class OUIPortMapper:
                     for entry, matched_oui in mac_group:
                         if entry.mac_address in self.resolved_macs:
                             continue
-                        ip_addr = self.mac_to_ip_lookup.get(
-                            entry.mac_address, "unknown"
+                        ip_addr = self.resolve_ip(
+                            entry.mac_address, entry.vlan
                         )
                         if connection_failed:
                             # SSH failed → endpoint, not a switch.

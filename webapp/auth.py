@@ -8,7 +8,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from .database import get_db
-from .db_models import User
+from .db_models import User, Venue, user_venue
 
 
 def hash_password(plain: str) -> str:
@@ -54,6 +54,39 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     return user
 
 
+def get_user_venues(db: Session, user: User) -> list:
+    """Return venues accessible to this user."""
+    if user.role == "super_admin":
+        return db.query(Venue).order_by(Venue.id).all()
+    return db.query(Venue).join(user_venue).filter(user_venue.c.user_id == user.id).order_by(Venue.id).all()
+
+
+def require_venue_access(user: User, venue_id: int, db: Session):
+    """Raise 403 if a site_admin doesn't have access to this venue."""
+    if user.role == "super_admin":
+        return
+    has = db.query(user_venue).filter(
+        user_venue.c.user_id == user.id,
+        user_venue.c.venue_id == venue_id,
+    ).first()
+    if not has:
+        raise HTTPException(status_code=403, detail="No access to this venue")
+
+
+def check_venue_access(request: Request, db: Session = Depends(get_db)):
+    """Middleware-style check: if the route has a venue_id path param, enforce access."""
+    user_id = request.session.get("user_id")
+    if user_id is None:
+        return  # auth gate will catch this
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user or user.role == "super_admin":
+        return
+    # Extract venue_id from path params
+    venue_id = request.path_params.get("venue_id")
+    if venue_id is not None:
+        require_venue_access(user, int(venue_id), db)
+
+
 def ensure_default_admin(db: Session) -> Optional[str]:
     """Create default admin if no users exist. Returns password if created."""
     if db.query(User).count() > 0:
@@ -62,7 +95,7 @@ def ensure_default_admin(db: Session) -> Optional[str]:
     admin = User(
         username="admin",
         password_hash=hash_password(password),
-        role="admin",
+        role="super_admin",
     )
     db.add(admin)
     db.commit()

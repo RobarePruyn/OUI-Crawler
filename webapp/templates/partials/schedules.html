@@ -29,6 +29,16 @@
             </td>
             <td>
                 {% if s.last_run_at %}
+                {% set job_status = schedule_statuses.get(s.id) %}
+                {% if job_status == "completed" %}
+                <span class="badge badge-ok">ok</span>
+                {% elif job_status == "failed" %}
+                <span class="badge badge-err">failed</span>
+                {% elif job_status == "running" %}
+                <span class="badge badge-warn">running</span>
+                {% elif job_status %}
+                <span class="badge badge-offline">{{ job_status }}</span>
+                {% endif %}
                 {{ s.last_run_at | localtime }}
                 {% if s.last_job_id %}
                 <a href="/jobs/{{ s.last_job_id }}">(view)</a>
