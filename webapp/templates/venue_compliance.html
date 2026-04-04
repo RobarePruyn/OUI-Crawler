@@ -3,7 +3,7 @@
 {% block title %}Compliance - {{ venue.name }} - OUI Port Mapper{% endblock %}
 {% block content %}
 <h1>Compliance: {{ venue.name }}</h1>
-<p>Based on persistent port state &mdash; last updated from discovery crawls.</p>
+<p>Based on persistent port state &mdash; last updated from network scans.</p>
 
 <div class="stat-row">
     <div class="stat-card">
@@ -21,7 +21,7 @@
 </div>
 
 {% if not results %}
-<p>No compliance data. Run a discovery crawl to populate port state, then
+<p>No compliance data. Run a scan to populate port state, then
 <button class="outline" style="width:auto;" onclick="runCheck()">Run Compliance Check</button></p>
 {% else %}
 

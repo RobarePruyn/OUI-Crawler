@@ -5,7 +5,7 @@
 </div>
 
 {% if not results %}
-<p>No compliance data. Run a discovery crawl to populate port state, then re-run the compliance check.</p>
+<p>No compliance data. Run a scan to populate port state, then re-run the compliance check.</p>
 {% else %}
 
 <div class="grid">
@@ -294,7 +294,7 @@ function _showSummary(data, statusEl) {
 
     if (data.rediscovery_job_id) {
         const jobId = data.rediscovery_job_id;
-        statusEl.innerHTML = statusMsg + '. Re-discovery in progress... <span aria-busy="true" style="font-size:0.75rem;"></span>';
+        statusEl.innerHTML = statusMsg + '. Re-scan in progress... <span aria-busy="true" style="font-size:0.75rem;"></span>';
         _pollRediscovery(jobId, statusEl);
     } else {
         const color = fail ? 'var(--pico-del-color)' : warn ? 'var(--pico-mark-background-color, orange)' : 'var(--pico-ins-color)';
@@ -310,7 +310,7 @@ function _pollRediscovery(jobId, statusEl) {
             .then(data => {
                 if (data.status === 'completed') {
                     clearInterval(poll);
-                    statusEl.innerHTML = ' Re-discovery complete. Running compliance check...';
+                    statusEl.innerHTML = ' Re-scan complete. Running compliance check...';
                     // Auto-run compliance check
                     fetch('/api/venues/{{ venue.id }}/compliance', {method: 'POST'})
                         .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
@@ -319,15 +319,15 @@ function _pollRediscovery(jobId, statusEl) {
                             htmx.ajax('GET', '/partials/compliance/{{ venue.id }}', {target: '#venue-compliance', swap: 'innerHTML'});
                         })
                         .catch(() => {
-                            statusEl.innerHTML = ' Re-discovery done. <a href="javascript:void(0)" onclick="runComplianceCheck()">Re-run compliance</a>';
+                            statusEl.innerHTML = ' Re-scan done. <a href="javascript:void(0)" onclick="runComplianceCheck()">Re-run compliance</a>';
                         });
                 } else if (data.status === 'failed') {
                     clearInterval(poll);
-                    statusEl.innerHTML = ' Re-discovery failed: ' + (data.error_message || 'unknown error');
+                    statusEl.innerHTML = ' Re-scan failed: ' + (data.error_message || 'unknown error');
                     statusEl.style.color = 'var(--pico-del-color)';
                 } else {
                     const msg = data.message ? (' — ' + data.message) : '';
-                    statusEl.innerHTML = ' Re-discovery in progress' + msg + '... <span aria-busy="true" style="font-size:0.75rem;"></span>';
+                    statusEl.innerHTML = ' Re-scan in progress' + msg + '... <span aria-busy="true" style="font-size:0.75rem;"></span>';
                 }
             })
             .catch(() => { clearInterval(poll); });

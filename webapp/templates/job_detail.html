@@ -22,7 +22,7 @@
     {% include "partials/progress.html" %}
 </div>
 
-{% if job.status == "completed" and job.job_type == "discovery" %}
+{% if job.status == "completed" and job.job_type in ["discovery", "inventory"] %}
 <p>
     <a href="/actions/{{ job.id }}" role="button" class="outline">Port Actions</a>
     {% if job.venue_id %}

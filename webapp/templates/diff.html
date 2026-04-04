@@ -2,10 +2,10 @@
 {% set active_page = "diff" %}
 {% block title %}Compare Runs - OUI Port Mapper{% endblock %}
 {% block content %}
-<h1>Compare Discovery Runs</h1>
+<h1>Compare Scan Runs</h1>
 
 {% if jobs | length < 2 %}
-<p>You need at least two completed discovery jobs to compare. <a href="/discovery">Run a discovery first.</a></p>
+<p>You need at least two completed scan jobs to compare. <a href="/discovery">Run a scan first.</a></p>
 {% else %}
 <form id="diff-form">
     <div class="grid">

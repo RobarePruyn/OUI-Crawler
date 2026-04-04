@@ -34,12 +34,8 @@
         <div class="stat-label">Issues Found</div>
     </div>
     <div class="stat-card">
-        <div class="stat-value-sm">{{ last_discovery.completed_at | localtime if last_discovery else "Never" }}</div>
-        <div class="stat-label">Last Discovery</div>
-    </div>
-    <div class="stat-card">
-        <div class="stat-value-sm">{{ last_inventory.completed_at | localtime if last_inventory else "Never" }}</div>
-        <div class="stat-label">Last Inventory</div>
+        <div class="stat-value-sm">{{ last_scan.completed_at | localtime if last_scan else "Never" }}</div>
+        <div class="stat-label">Last Scan</div>
     </div>
 </div>
 
@@ -73,7 +69,7 @@
     <tbody>
         {% for job in jobs %}
         <tr>
-            <td>{{ job.job_type }}</td>
+            <td>{{ "Full Scan" if job.job_type == "discovery" else "Inventory" if job.job_type == "inventory" else job.job_type | title }}</td>
             <td>
                 {% if job.status == "running" %}
                 <span class="badge badge-running">running</span>

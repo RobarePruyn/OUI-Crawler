@@ -106,6 +106,16 @@
         <button type="button" id="btn-push" class="outline">Assign VLAN</button>
         <div id="push-result"></div>
     </div>
+
+    <div class="form-section" id="port-actions-section" style="display:none;">
+        <h3>Port Actions</h3>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <button type="button" class="outline" onclick="portAction('shutdown')">Shutdown</button>
+            <button type="button" class="outline" onclick="portAction('no_shutdown')">No Shutdown</button>
+            <button type="button" class="outline secondary" onclick="portAction('port_cycle')">Port Cycle</button>
+        </div>
+        <div id="port-action-result"></div>
+    </div>
 </div>
 
 <script>
@@ -260,9 +270,13 @@ function renderResult(d) {
 
     document.getElementById('push-result').innerHTML = '';
 
-    // Show/hide VLAN push section
+    // Show/hide VLAN push and port actions sections
+    const hasPort = d.switch_ip && d.interface;
     document.getElementById('vlan-push-section').style.display =
-        (d.switch_ip && d.interface && vlans.length) ? '' : 'none';
+        (hasPort && vlans.length) ? '' : 'none';
+    document.getElementById('port-actions-section').style.display =
+        hasPort ? '' : 'none';
+    document.getElementById('port-action-result').innerHTML = '';
 }
 
 function updatePolicyInfo(d) {
@@ -340,6 +354,38 @@ document.getElementById('btn-push').addEventListener('click', function() {
             '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
     });
 });
+
+function portAction(action) {
+    if (!lastResult || !lastResult.switch_ip) return;
+    const label = action.replace(/_/g, ' ');
+    if (!confirm(label.charAt(0).toUpperCase() + label.slice(1) + ' ' + lastResult.interface + ' on ' + lastResult.switch_hostname + '?')) return;
+
+    const el = document.getElementById('port-action-result');
+    el.innerHTML = '<article aria-busy="true">Sending ' + label + '...</article>';
+
+    fetch('/api/lookup/port-action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            venue_id: parseInt(venueSelect.value),
+            switch_ip: lastResult.switch_ip,
+            interface: lastResult.interface,
+            platform: lastResult.platform,
+            action: action,
+        }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        const color = data.status === 'ok' ? 'var(--pico-ins-color)' : 'var(--pico-del-color)';
+        let html = '<article><p style="color:' + color + ';">' + escapeHtml(data.message) + '</p>';
+        if (data.commands) html += '<pre><code>' + escapeHtml(data.commands.join('\n')) + '</code></pre>';
+        html += '</article>';
+        el.innerHTML = html;
+    })
+    .catch(err => {
+        el.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+    });
+}
 
 function escapeHtml(text) {
     const div = document.createElement('div');

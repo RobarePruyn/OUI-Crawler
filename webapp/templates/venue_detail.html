@@ -109,8 +109,7 @@
 
 {# ── Action bar ── #}
 <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
-    <button class="outline" onclick="venueDiscover()">Run Discovery</button>
-    <button class="outline secondary" onclick="venueInventory()">Run Inventory</button>
+    <button class="outline" onclick="venueScan()">Run Scan</button>
 </div>
 <div id="venue-action-result"></div>
 
@@ -320,25 +319,12 @@ function testConnection() {
         });
 }
 
-function venueDiscover() {
+function venueScan() {
     const el = document.getElementById('venue-action-result');
-    el.innerHTML = '<article aria-busy="true">Starting discovery...</article>';
-    fetch('/api/venues/{{ venue.id }}/discover', {method: 'POST'})
+    el.innerHTML = '<article aria-busy="true">Starting scan...</article>';
+    fetch('/api/venues/{{ venue.id }}/scan?mode=full', {method: 'POST'})
         .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); }); return r.json(); })
         .then(data => {
-            // Load inline progress banner instead of navigating away
-            htmx.ajax('GET', '/partials/venue-job/' + data.id, {target: '#venue-action-result', swap: 'innerHTML'});
-        })
-        .catch(err => { el.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>'; });
-}
-
-function venueInventory() {
-    const el = document.getElementById('venue-action-result');
-    el.innerHTML = '<article aria-busy="true">Starting inventory...</article>';
-    fetch('/api/venues/{{ venue.id }}/inventory', {method: 'POST'})
-        .then(r => { if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); }); return r.json(); })
-        .then(data => {
-            // Load inline progress banner instead of navigating away
             htmx.ajax('GET', '/partials/venue-job/' + data.id, {target: '#venue-action-result', swap: 'innerHTML'});
         })
         .catch(err => { el.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>'; });

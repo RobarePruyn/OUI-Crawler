@@ -14,6 +14,7 @@ from ..db_models import OUIEntry, PortPolicy, Venue, VenueVlan
 from ..schemas import (
     InterfaceStats,
     LookupHop,
+    LookupPortActionRequest,
     LookupRequest,
     LookupResponse,
     OUIMatch,
@@ -260,13 +261,20 @@ def vlan_push(
         conn.send_config_set(port_commands)
         all_commands.extend(port_commands)
 
+        # Bounce port so device re-DHCPs on the new VLAN
+        import time
+        conn.send_config_set([f"interface {req.interface}", "shutdown"])
+        time.sleep(2)
+        conn.send_config_set([f"interface {req.interface}", "no shutdown"])
+        all_commands.extend([f"interface {req.interface}", "shutdown", "! wait 2s", "no shutdown"])
+
         if req.save_config:
             save_cmd = platform.get_save_config_command()
             conn.send_command(save_cmd, read_timeout=30)
 
         conn.disconnect()
 
-        message = f"VLAN {req.vlan} assigned to {req.interface} on {req.switch_ip}"
+        message = f"VLAN {req.vlan} assigned to {req.interface} on {req.switch_ip} (port bounced)"
         if provisioned_on:
             message += f" (VLAN created on {', '.join(provisioned_on)})"
 
@@ -281,3 +289,58 @@ def vlan_push(
             "status": "error",
             "message": str(exc),
         }
+
+
+@router.post("/port-action")
+def lookup_port_action(
+    req: LookupPortActionRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Shut / no-shut / cycle a port directly from the lookup page."""
+    if req.action not in ("shutdown", "no_shutdown", "port_cycle"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+
+    venue = db.query(Venue).get(req.venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    password = decrypt_credential(venue.ssh_password_enc)
+    enable = decrypt_credential(venue.enable_secret_enc) if venue.enable_secret_enc else password
+
+    try:
+        conn = ConnectHandler(
+            device_type=req.platform,
+            host=req.switch_ip,
+            username=venue.ssh_username,
+            password=password,
+            secret=enable,
+            timeout=15,
+            read_timeout_override=30,
+        )
+        conn.enable()
+
+        if req.action == "shutdown":
+            cmds = [f"interface {req.interface}", "shutdown"]
+            conn.send_config_set(cmds)
+        elif req.action == "no_shutdown":
+            cmds = [f"interface {req.interface}", "no shutdown"]
+            conn.send_config_set(cmds)
+        elif req.action == "port_cycle":
+            import time
+            conn.send_config_set([f"interface {req.interface}", "shutdown"])
+            time.sleep(3)
+            conn.send_config_set([f"interface {req.interface}", "no shutdown"])
+            cmds = [f"interface {req.interface}", "shutdown", "! wait 3s", "no shutdown"]
+
+        conn.disconnect()
+
+        label = req.action.replace("_", " ").title()
+        return {
+            "status": "ok",
+            "commands": cmds,
+            "message": f"{label} on {req.interface} ({req.switch_ip})",
+        }
+    except Exception as exc:
+        logger.error(f"Port action failed: {exc}")
+        return {"status": "error", "message": str(exc)}

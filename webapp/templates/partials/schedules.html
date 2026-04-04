@@ -15,7 +15,7 @@
     <tbody>
         {% for s in schedules %}
         <tr>
-            <td>{{ s.job_type | title }}</td>
+            <td>{{ "Full Scan" if s.job_type == "discovery" else "Inventory" if s.job_type == "inventory" else s.job_type | title }}</td>
             <td>{{ s.time_of_day }}</td>
             <td>
                 <form hx-put="/api/venues/{{ venue.id }}/schedules/{{ s.id }}"
@@ -73,8 +73,8 @@
         <label>
             Job Type
             <select name="job_type">
-                <option value="discovery">Discovery</option>
-                <option value="inventory">Inventory</option>
+                <option value="discovery">Full Scan</option>
+                <option value="inventory">Inventory Only</option>
             </select>
         </label>
         <label>

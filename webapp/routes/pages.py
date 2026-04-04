@@ -83,17 +83,10 @@ def dashboard(
     ctx = {"user": user, "venues": venues, "venue": venue}
 
     if venue:
-        # Last completed discovery
-        last_discovery = (
+        # Last completed scan (discovery or inventory)
+        last_scan = (
             db.query(Job)
-            .filter(Job.venue_id == venue.id, Job.job_type == "discovery", Job.status == "completed")
-            .order_by(Job.completed_at.desc())
-            .first()
-        )
-        # Last completed inventory
-        last_inventory = (
-            db.query(Job)
-            .filter(Job.venue_id == venue.id, Job.job_type == "inventory", Job.status == "completed")
+            .filter(Job.venue_id == venue.id, Job.job_type.in_(["discovery", "inventory"]), Job.status == "completed")
             .order_by(Job.completed_at.desc())
             .first()
         )
@@ -113,8 +106,7 @@ def dashboard(
         port_count = db.query(VenuePort).join(VenueSwitch).filter(VenueSwitch.venue_id == venue.id).count()
 
         ctx.update({
-            "last_discovery": last_discovery,
-            "last_inventory": last_inventory,
+            "last_scan": last_scan,
             "compliance_ok": compliance_ok,
             "compliance_warn": compliance_warn,
             "jobs": jobs,

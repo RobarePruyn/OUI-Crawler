@@ -449,3 +449,11 @@ class VlanPushRequest(BaseModel):
     vlan: str
     platform: str
     save_config: bool = False
+
+
+class LookupPortActionRequest(BaseModel):
+    venue_id: int
+    switch_ip: str
+    interface: str
+    platform: str
+    action: str  # shutdown, no_shutdown, port_cycle

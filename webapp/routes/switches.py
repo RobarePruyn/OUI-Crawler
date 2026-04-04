@@ -203,6 +203,15 @@ def port_action(
             if vlan_create_cmds:
                 conn.send_config_set(vlan_create_cmds)
             commands = plat.get_vlan_assign_commands(port.interface, req.vlan)
+            conn.send_config_set(commands)
+            # Bounce port so device re-DHCPs on the new VLAN
+            conn.send_config_set([f"interface {port.interface}", "shutdown"])
+            time.sleep(2)
+            conn.send_config_set([f"interface {port.interface}", "no shutdown"])
+            commands += [f"interface {port.interface}", "shutdown", "! wait 2s", "no shutdown"]
+            # Clear stale IP — device will get a new one via DHCP
+            port.ip_address = None
+            port.vlan = req.vlan
             action_label = f"vlan_assign ({req.vlan})"
         elif req.action == "port_config_push":
             device_vlan = (port.vlan or "").strip()
@@ -231,9 +240,9 @@ def port_action(
         else:
             raise HTTPException(status_code=400, detail=f"Unknown action: {req.action}")
 
-        # Send commands (port_cycle already sent above)
+        # Send commands (port_cycle and vlan_assign already sent above)
         cmd_warnings = []
-        if req.action != "port_cycle":
+        if req.action not in ("port_cycle", "vlan_assign"):
             output = conn.send_config_set(commands)
             cmd_warnings = _check_config_output(output, commands)
             if cmd_warnings:
@@ -450,6 +459,8 @@ def batch_port_action(
 
                     if action.action == "vlan_assign" and action.vlan:
                         commands = plat.get_vlan_assign_commands(port.interface, action.vlan)
+                        # Bounce port so device re-DHCPs on the new VLAN
+                        commands += [f"interface {port.interface}", "shutdown"]
                         action_label = f"vlan_assign ({action.vlan})"
                     elif action.action == "port_config_push":
                         device_vlan = (port.vlan or "").strip()
@@ -478,6 +489,10 @@ def batch_port_action(
                         if cmd_warnings:
                             logger.warning("Command warnings on %s:%s: %s",
                                            switch.hostname, port.interface, cmd_warnings)
+                        # Bring port back up after VLAN assign (shut was in commands)
+                        if action.action == "vlan_assign":
+                            time.sleep(2)
+                            conn.send_config_set([f"interface {port.interface}", "no shutdown"])
 
                     detail = action_label
                     if cmd_warnings:
@@ -597,6 +612,7 @@ def batch_port_action(
                 log_changes(db, venue_id, "port", port.id,
                             {"vlan": op["old_vlan"]}, {"vlan": op["new_vlan"]})
                 port.vlan = op["new_vlan"]
+                port.ip_address = None  # clear stale IP — device will re-DHCP
         elif op["type"] == "port_config_error":
             # Record the error so compliance view can show it
             port = port_map.get(op["port_id"])
