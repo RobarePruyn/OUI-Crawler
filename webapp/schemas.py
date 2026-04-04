@@ -456,4 +456,16 @@ class LookupPortActionRequest(BaseModel):
     switch_ip: str
     interface: str
     platform: str
-    action: str  # shutdown, no_shutdown, port_cycle
+    action: str  # shutdown, no_shutdown, port_cycle, poe_cycle
+
+
+class BulkPortTarget(BaseModel):
+    switch_ip: str
+    interface: str
+    platform: str
+
+
+class BulkPortActionRequest(BaseModel):
+    venue_id: int
+    action: str  # shutdown, no_shutdown, port_cycle, poe_cycle
+    targets: list[BulkPortTarget]

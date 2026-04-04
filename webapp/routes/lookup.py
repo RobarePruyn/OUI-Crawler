@@ -2,6 +2,10 @@
 
 import json
 import logging
+import re
+import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Depends, HTTPException
 from netmiko import ConnectHandler
@@ -12,6 +16,7 @@ from ..crypto import decrypt_credential
 from ..database import get_db
 from ..db_models import OUIEntry, PortPolicy, Venue, VenuePort, VenueSwitch, VenueVlan
 from ..schemas import (
+    BulkPortActionRequest,
     InterfaceStats,
     LookupHop,
     LookupPortActionRequest,
@@ -23,6 +28,8 @@ from ..schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LAG_RE = re.compile(r'^(lag\d|port-channel\d|po\d|ae\d|bond\d|loopback|vlan)', re.IGNORECASE)
 
 router = APIRouter(prefix="/api/lookup", tags=["lookup"])
 
@@ -167,6 +174,10 @@ def device_search(
         mac_norm = (port.mac_address or "").replace(".", "").replace(":", "").replace("-", "").lower()
         ip = (port.ip_address or "").lower()
 
+        # Skip LAGs, port-channels, loopbacks, SVIs — only edge ports
+        if _LAG_RE.match(port.interface or ""):
+            continue
+
         if term_normalized in mac_norm or term in ip or term in (port.matched_oui or "").lower():
             results.append({
                 "port_id": port.id,
@@ -310,7 +321,6 @@ def vlan_push(
         all_commands.extend(port_commands)
 
         # Bounce port so device re-DHCPs on the new VLAN
-        import time
         conn.send_config_set([f"interface {req.interface}", "shutdown"])
         time.sleep(2)
         conn.send_config_set([f"interface {req.interface}", "no shutdown"])
@@ -378,13 +388,11 @@ def lookup_port_action(
             cmds = [f"interface {req.interface}", "no shutdown"]
             conn.send_config_set(cmds)
         elif req.action == "port_cycle":
-            import time
             conn.send_config_set([f"interface {req.interface}", "shutdown"])
             time.sleep(3)
             conn.send_config_set([f"interface {req.interface}", "no shutdown"])
             cmds = [f"interface {req.interface}", "shutdown", "! wait 3s", "no shutdown"]
         elif req.action == "poe_cycle":
-            import time
             poe_off = plat.get_poe_off_command(req.interface)
             conn.send_config_set(poe_off)
             time.sleep(3)
@@ -403,3 +411,93 @@ def lookup_port_action(
     except Exception as exc:
         logger.error(f"Port action failed: {exc}")
         return {"status": "error", "message": str(exc)}
+
+
+@router.post("/bulk-action")
+def bulk_port_action(
+    req: BulkPortActionRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Run a port action on multiple devices, grouped by switch for efficiency."""
+    if req.action not in ("shutdown", "no_shutdown", "port_cycle", "poe_cycle"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+
+    venue = db.query(Venue).get(req.venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    password = decrypt_credential(venue.ssh_password_enc)
+    enable = decrypt_credential(venue.enable_secret_enc) if venue.enable_secret_enc else password
+
+    # Group targets by switch
+    by_switch: dict[str, list] = defaultdict(list)
+    platform_map: dict[str, str] = {}
+    for t in req.targets:
+        by_switch[t.switch_ip].append(t.interface)
+        platform_map[t.switch_ip] = t.platform
+
+    results: list[dict] = []
+
+    def _process_switch(switch_ip: str, interfaces: list[str]) -> list[dict]:
+        """SSH once per switch, run action on all its interfaces."""
+        local_results = []
+        platform = platform_map[switch_ip]
+        try:
+            conn = ConnectHandler(
+                device_type=platform,
+                host=switch_ip,
+                username=venue.ssh_username,
+                password=password,
+                secret=enable,
+                timeout=15,
+                read_timeout_override=30,
+            )
+            conn.enable()
+
+            from oui_mapper_engine.platforms import get_platform
+            plat = get_platform(platform)
+
+            for intf in interfaces:
+                try:
+                    if req.action == "shutdown":
+                        conn.send_config_set([f"interface {intf}", "shutdown"])
+                    elif req.action == "no_shutdown":
+                        conn.send_config_set([f"interface {intf}", "no shutdown"])
+                    elif req.action == "port_cycle":
+                        conn.send_config_set([f"interface {intf}", "shutdown"])
+                        time.sleep(2)
+                        conn.send_config_set([f"interface {intf}", "no shutdown"])
+                    elif req.action == "poe_cycle":
+                        conn.send_config_set(plat.get_poe_off_command(intf))
+                        time.sleep(2)
+                        conn.send_config_set(plat.get_poe_on_command(intf))
+                    local_results.append({"switch_ip": switch_ip, "interface": intf, "status": "ok"})
+                except Exception as exc:
+                    local_results.append({"switch_ip": switch_ip, "interface": intf, "status": "error", "error": str(exc)})
+
+            conn.disconnect()
+        except Exception as exc:
+            # SSH connection failed — all interfaces on this switch fail
+            for intf in interfaces:
+                local_results.append({"switch_ip": switch_ip, "interface": intf, "status": "error", "error": str(exc)})
+        return local_results
+
+    # Run switches in parallel (one thread per switch, sequential ports within)
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = {
+            pool.submit(_process_switch, sw_ip, intfs): sw_ip
+            for sw_ip, intfs in by_switch.items()
+        }
+        for future in as_completed(futures):
+            results.extend(future.result())
+
+    ok = sum(1 for r in results if r["status"] == "ok")
+    failed = [r for r in results if r["status"] != "ok"]
+
+    return {
+        "ok": ok,
+        "failed": len(failed),
+        "total": len(results),
+        "errors": failed,
+    }

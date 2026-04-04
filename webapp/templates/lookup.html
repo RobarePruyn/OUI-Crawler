@@ -32,9 +32,11 @@
 <div id="search-results" style="display:none;">
     <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">
         <h3 style="margin:0;" id="search-count"></h3>
-        <div style="display:flex;gap:0.5rem;">
-            <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('port_cycle')">Cycle Port (all)</button>
-            <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('poe_cycle')">Cycle Power (all)</button>
+        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <button type="button" class="outline" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('shutdown')">Shutdown (selected)</button>
+            <button type="button" class="outline" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('no_shutdown')">No Shutdown (selected)</button>
+            <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('port_cycle')">Cycle Port (selected)</button>
+            <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('poe_cycle')">Cycle Power (selected)</button>
         </div>
     </div>
     <figure>
@@ -248,39 +250,45 @@ function singleSearchAction(idx, action) {
 function bulkAction(action) {
     const selected = getSelectedDevices();
     if (!selected.length) return;
-    const label = action === 'poe_cycle' ? 'cycle power' : 'cycle port';
-    if (!confirm('Are you sure you want to ' + label + ' on ' + selected.length + ' device(s)?')) return;
+    const labels = {shutdown: 'shut down', no_shutdown: 'bring up', port_cycle: 'cycle port', poe_cycle: 'cycle power'};
+    const label = labels[action] || action;
+    if (!confirm('Are you sure you want to ' + label + ' on ' + selected.length + ' device(s)?\n\nThis will SSH into ' +
+        new Set(selected.map(d => d.switch_ip)).size + ' switch(es).')) return;
 
     const el = document.getElementById('bulk-result');
-    el.innerHTML = '<article aria-busy="true">Running ' + label + ' on ' + selected.length + ' device(s)...</article>';
+    el.innerHTML = '<article aria-busy="true">Running ' + label + ' on ' + selected.length + ' device(s) across ' +
+        new Set(selected.map(d => d.switch_ip)).size + ' switch(es)...</article>';
 
-    let done = 0, ok = 0, fail = 0;
-    const total = selected.length;
-
-    selected.forEach(dev => {
-        fetch('/api/lookup/port-action', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({
-                venue_id: parseInt(venueSelect.value),
-                switch_ip: dev.switch_ip,
-                interface: dev.interface,
-                platform: dev.platform,
-                action: action,
-            }),
-        })
-        .then(r => r.json())
-        .then(data => { if (data.status === 'ok') ok++; else fail++; })
-        .catch(() => fail++)
-        .finally(() => {
-            done++;
-            if (done === total) {
-                const color = fail ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
-                el.innerHTML = '<article><p style="color:' + color + ';">' + ok + ' succeeded, ' + fail + ' failed</p></article>';
-            } else {
-                el.innerHTML = '<article aria-busy="true">' + done + '/' + total + ' complete...</article>';
-            }
-        });
+    fetch('/api/lookup/bulk-action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            venue_id: parseInt(venueSelect.value),
+            action: action,
+            targets: selected.map(d => ({switch_ip: d.switch_ip, interface: d.interface, platform: d.platform})),
+        }),
+    })
+    .then(r => {
+        if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); });
+        return r.json();
+    })
+    .then(data => {
+        let html = '<article>';
+        const color = data.failed ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
+        html += '<p style="color:' + color + ';">' + data.ok + ' succeeded, ' + data.failed + ' failed (of ' + data.total + ')</p>';
+        if (data.errors && data.errors.length) {
+            html += '<details><summary style="cursor:pointer;color:var(--pico-del-color);">Show ' + data.errors.length + ' error(s)</summary>';
+            html += '<table style="font-size:0.8rem;margin-top:0.5rem;"><thead><tr><th>Switch</th><th>Interface</th><th>Error</th></tr></thead><tbody>';
+            data.errors.forEach(e => {
+                html += '<tr><td>' + escapeHtml(e.switch_ip) + '</td><td>' + escapeHtml(e.interface) + '</td><td style="color:var(--pico-del-color);">' + escapeHtml(e.error) + '</td></tr>';
+            });
+            html += '</tbody></table></details>';
+        }
+        html += '</article>';
+        el.innerHTML = html;
+    })
+    .catch(err => {
+        el.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
     });
 }
 
