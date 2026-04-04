@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..auth import User, get_current_user
 from ..crypto import decrypt_credential
 from ..database import get_db
-from ..db_models import OUIEntry, PortPolicy, Venue, VenueVlan
+from ..db_models import OUIEntry, PortPolicy, Venue, VenuePort, VenueSwitch, VenueVlan
 from ..schemas import (
     InterfaceStats,
     LookupHop,
@@ -133,6 +133,54 @@ def device_lookup(
         port_policies=port_policies,
         venue_vlans=sorted(all_vlans),
     )
+
+
+@router.post("/search")
+def device_search(
+    req: LookupRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Search VenuePort DB for partial MAC or IP matches."""
+    venue = db.query(Venue).get(req.venue_id)
+    if not venue:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    term = req.search_term.strip().lower()
+    if len(term) < 3:
+        raise HTTPException(status_code=400, detail="Search term must be at least 3 characters")
+
+    # Normalize: strip colons/dots/dashes for MAC matching
+    term_normalized = term.replace(":", "").replace(".", "").replace("-", "")
+
+    # Query ports for this venue with partial match
+    ports = (
+        db.query(VenuePort, VenueSwitch)
+        .join(VenueSwitch, VenuePort.switch_id == VenueSwitch.id)
+        .filter(VenueSwitch.venue_id == req.venue_id)
+        .filter(VenuePort.mac_address.isnot(None))
+        .all()
+    )
+
+    results = []
+    for port, switch in ports:
+        mac_norm = (port.mac_address or "").replace(".", "").replace(":", "").replace("-", "").lower()
+        ip = (port.ip_address or "").lower()
+
+        if term_normalized in mac_norm or term in ip or term in (port.matched_oui or "").lower():
+            results.append({
+                "port_id": port.id,
+                "switch_hostname": switch.hostname,
+                "switch_ip": switch.mgmt_ip,
+                "interface": port.interface,
+                "mac_address": port.mac_address,
+                "ip_address": port.ip_address,
+                "vlan": port.vlan,
+                "matched_oui": port.matched_oui,
+                "platform": switch.platform or venue.platform,
+            })
+
+    return {"results": results, "count": len(results)}
 
 
 @router.post("/vlan-push")
@@ -298,7 +346,7 @@ def lookup_port_action(
     db: Session = Depends(get_db),
 ):
     """Shut / no-shut / cycle a port directly from the lookup page."""
-    if req.action not in ("shutdown", "no_shutdown", "port_cycle"):
+    if req.action not in ("shutdown", "no_shutdown", "port_cycle", "poe_cycle"):
         raise HTTPException(status_code=400, detail="Invalid action")
 
     venue = db.query(Venue).get(req.venue_id)
@@ -320,6 +368,9 @@ def lookup_port_action(
         )
         conn.enable()
 
+        from oui_mapper_engine.platforms import get_platform
+        plat = get_platform(req.platform)
+
         if req.action == "shutdown":
             cmds = [f"interface {req.interface}", "shutdown"]
             conn.send_config_set(cmds)
@@ -332,6 +383,14 @@ def lookup_port_action(
             time.sleep(3)
             conn.send_config_set([f"interface {req.interface}", "no shutdown"])
             cmds = [f"interface {req.interface}", "shutdown", "! wait 3s", "no shutdown"]
+        elif req.action == "poe_cycle":
+            import time
+            poe_off = plat.get_poe_off_command(req.interface)
+            conn.send_config_set(poe_off)
+            time.sleep(3)
+            poe_on = plat.get_poe_on_command(req.interface)
+            conn.send_config_set(poe_on)
+            cmds = poe_off + ["! wait 3s"] + poe_on
 
         conn.disconnect()
 

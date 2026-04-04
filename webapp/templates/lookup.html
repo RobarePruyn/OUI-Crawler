@@ -12,18 +12,49 @@
             <select id="venue-select" required>
                 <option value="">-- Select venue --</option>
                 {% for v in venues %}
-                <option value="{{ v.id }}">{{ v.name }} ({{ v.core_ip }})</option>
+                <option value="{{ v.id }}" {% if selected_venue_id == v.id %}selected{% endif %}>{{ v.name }} ({{ v.core_ip }})</option>
                 {% endfor %}
             </select>
             <small class="field-help">Credentials and core switch come from the venue</small>
         </label>
         <label class="required">
             MAC or IP Address
-            <input type="text" id="search-term" placeholder="00:1A:2B:3C:4D:5E or 10.1.1.100" required>
-            <small class="field-help">Enter a MAC address (any format) or an IP address</small>
+            <input type="text" id="search-term" placeholder="4ca0.03 or 10.2.1 or full address" required>
+            <small class="field-help">Partial or full MAC/IP. Partial searches the DB; full does a live SSH lookup.</small>
         </label>
     </div>
-    <button type="button" id="btn-lookup" disabled>Lookup</button>
+    <div style="display:flex;gap:0.5rem;">
+        <button type="button" id="btn-search" disabled>Search</button>
+        <button type="button" id="btn-lookup" class="outline" disabled>Live Lookup</button>
+    </div>
+</div>
+
+<div id="search-results" style="display:none;">
+    <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">
+        <h3 style="margin:0;" id="search-count"></h3>
+        <div style="display:flex;gap:0.5rem;">
+            <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('port_cycle')">Cycle Port (all)</button>
+            <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.8rem;" onclick="bulkAction('poe_cycle')">Cycle Power (all)</button>
+        </div>
+    </div>
+    <figure>
+    <table id="search-table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+                <th>Switch</th>
+                <th>Interface</th>
+                <th>MAC</th>
+                <th>IP</th>
+                <th>VLAN</th>
+                <th>OUI</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody id="search-body"></tbody>
+    </table>
+    </figure>
+    <div id="bulk-result"></div>
 </div>
 
 <div id="lookup-result" style="display:none;">
@@ -112,7 +143,8 @@
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
             <button type="button" class="outline" onclick="portAction('shutdown')">Shutdown</button>
             <button type="button" class="outline" onclick="portAction('no_shutdown')">No Shutdown</button>
-            <button type="button" class="outline secondary" onclick="portAction('port_cycle')">Port Cycle</button>
+            <button type="button" class="outline secondary" onclick="portAction('port_cycle')">Cycle Port</button>
+            <button type="button" class="outline secondary" onclick="portAction('poe_cycle')">Cycle Power</button>
         </div>
         <div id="port-action-result"></div>
     </div>
@@ -122,21 +154,165 @@
 const venueSelect = document.getElementById('venue-select');
 const searchInput = document.getElementById('search-term');
 const btnLookup = document.getElementById('btn-lookup');
+const btnSearch = document.getElementById('btn-search');
 const resultDiv = document.getElementById('lookup-result');
+const searchDiv = document.getElementById('search-results');
 
 function checkReady() {
-    btnLookup.disabled = !(venueSelect.value && searchInput.value.trim());
+    const ready = venueSelect.value && searchInput.value.trim();
+    btnLookup.disabled = !ready;
+    btnSearch.disabled = !ready;
 }
 venueSelect.addEventListener('change', checkReady);
 searchInput.addEventListener('input', checkReady);
+checkReady();
 
 // Store last lookup result for VLAN push
 let lastResult = null;
+let searchResults = [];
 
+// --- DB Search (partial match, multi-result) ---
+btnSearch.addEventListener('click', function() {
+    btnSearch.classList.add('loading');
+    btnSearch.disabled = true;
+    searchDiv.style.display = 'none';
+    resultDiv.style.display = 'none';
+
+    fetch('/api/lookup/search', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            venue_id: parseInt(venueSelect.value),
+            search_term: searchInput.value.trim(),
+        }),
+    })
+    .then(r => {
+        if (!r.ok) return r.json().then(d => { throw new Error(d.detail || 'Server error'); });
+        return r.json();
+    })
+    .then(data => {
+        searchResults = data.results;
+        renderSearchResults(data);
+        searchDiv.style.display = '';
+    })
+    .catch(err => {
+        searchDiv.style.display = '';
+        searchDiv.innerHTML = '<article><p style="color:var(--pico-del-color);">' + err.message + '</p></article>';
+    })
+    .finally(() => {
+        btnSearch.classList.remove('loading');
+        checkReady();
+    });
+});
+
+function renderSearchResults(data) {
+    document.getElementById('search-count').textContent = data.count + ' device' + (data.count !== 1 ? 's' : '') + ' found';
+    const body = document.getElementById('search-body');
+    body.innerHTML = data.results.map((r, i) =>
+        '<tr>' +
+        '<td><input type="checkbox" class="row-select" data-idx="' + i + '" checked></td>' +
+        '<td>' + escapeHtml(r.switch_hostname) + '</td>' +
+        '<td>' + escapeHtml(r.interface) + '</td>' +
+        '<td>' + escapeHtml(r.mac_address || '-') + '</td>' +
+        '<td>' + escapeHtml(r.ip_address || '-') + '</td>' +
+        '<td>' + escapeHtml(r.vlan || '-') + '</td>' +
+        '<td>' + escapeHtml(r.matched_oui || '-') + '</td>' +
+        '<td style="white-space:nowrap;">' +
+            '<button type="button" class="outline secondary" style="padding:0.15rem 0.4rem;width:auto;font-size:0.7rem;margin:0 0.15rem;" onclick="singleSearchAction(' + i + ',\'port_cycle\')">Cycle Port</button>' +
+            '<button type="button" class="outline secondary" style="padding:0.15rem 0.4rem;width:auto;font-size:0.7rem;margin:0 0.15rem;" onclick="singleSearchAction(' + i + ',\'poe_cycle\')">Cycle Power</button>' +
+        '</td></tr>'
+    ).join('');
+    document.getElementById('select-all').checked = true;
+    document.getElementById('bulk-result').innerHTML = '';
+}
+
+function toggleSelectAll(el) {
+    document.querySelectorAll('.row-select').forEach(cb => cb.checked = el.checked);
+}
+
+function getSelectedDevices() {
+    const selected = [];
+    document.querySelectorAll('.row-select:checked').forEach(cb => {
+        selected.push(searchResults[parseInt(cb.dataset.idx)]);
+    });
+    return selected;
+}
+
+function singleSearchAction(idx, action) {
+    const dev = searchResults[idx];
+    const label = action === 'poe_cycle' ? 'Cycle power' : 'Cycle port';
+    if (!confirm(label + ' on ' + dev.interface + ' (' + dev.switch_hostname + ')?')) return;
+    _doPortAction(dev, action, document.getElementById('bulk-result'));
+}
+
+function bulkAction(action) {
+    const selected = getSelectedDevices();
+    if (!selected.length) return;
+    const label = action === 'poe_cycle' ? 'cycle power' : 'cycle port';
+    if (!confirm('Are you sure you want to ' + label + ' on ' + selected.length + ' device(s)?')) return;
+
+    const el = document.getElementById('bulk-result');
+    el.innerHTML = '<article aria-busy="true">Running ' + label + ' on ' + selected.length + ' device(s)...</article>';
+
+    let done = 0, ok = 0, fail = 0;
+    const total = selected.length;
+
+    selected.forEach(dev => {
+        fetch('/api/lookup/port-action', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                venue_id: parseInt(venueSelect.value),
+                switch_ip: dev.switch_ip,
+                interface: dev.interface,
+                platform: dev.platform,
+                action: action,
+            }),
+        })
+        .then(r => r.json())
+        .then(data => { if (data.status === 'ok') ok++; else fail++; })
+        .catch(() => fail++)
+        .finally(() => {
+            done++;
+            if (done === total) {
+                const color = fail ? 'var(--pico-del-color)' : 'var(--pico-ins-color)';
+                el.innerHTML = '<article><p style="color:' + color + ';">' + ok + ' succeeded, ' + fail + ' failed</p></article>';
+            } else {
+                el.innerHTML = '<article aria-busy="true">' + done + '/' + total + ' complete...</article>';
+            }
+        });
+    });
+}
+
+function _doPortAction(dev, action, resultEl) {
+    resultEl.innerHTML = '<span aria-busy="true" style="font-size:0.75rem;"></span>';
+    fetch('/api/lookup/port-action', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            venue_id: parseInt(venueSelect.value),
+            switch_ip: dev.switch_ip,
+            interface: dev.interface,
+            platform: dev.platform,
+            action: action,
+        }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        const color = data.status === 'ok' ? 'var(--pico-ins-color)' : 'var(--pico-del-color)';
+        resultEl.innerHTML = '<small style="color:' + color + ';">' + escapeHtml(data.message) + '</small>';
+    })
+    .catch(err => {
+        resultEl.innerHTML = '<small style="color:var(--pico-del-color);">' + err.message + '</small>';
+    });
+}
+
+// --- Live SSH Lookup (single device, full details) ---
 btnLookup.addEventListener('click', function() {
     btnLookup.classList.add('loading');
     btnLookup.disabled = true;
     resultDiv.style.display = 'none';
+    searchDiv.style.display = 'none';
 
     fetch('/api/lookup', {
         method: 'POST',

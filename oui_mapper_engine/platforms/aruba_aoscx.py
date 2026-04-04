@@ -45,6 +45,12 @@ class ArubaAOSCXPlatform(SwitchPlatform):
             "spanning-tree port-type admin-edge",
         ]
 
+    def get_poe_off_command(self, interface: str) -> list[str]:
+        return [f"interface {interface}", "no power-over-ethernet"]
+
+    def get_poe_on_command(self, interface: str) -> list[str]:
+        return [f"interface {interface}", "power-over-ethernet"]
+
     def get_port_config_commands(
         self,
         interface: str,

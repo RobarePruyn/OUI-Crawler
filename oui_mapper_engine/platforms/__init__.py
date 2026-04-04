@@ -59,6 +59,14 @@ class SwitchPlatform(ABC):
         """Return config commands to set an access port's VLAN."""
         ...
 
+    def get_poe_off_command(self, interface: str) -> list[str]:
+        """Return config commands to disable PoE on a port."""
+        return [f"interface {interface}", "power inline never"]
+
+    def get_poe_on_command(self, interface: str) -> list[str]:
+        """Return config commands to re-enable PoE on a port."""
+        return [f"interface {interface}", "power inline auto"]
+
     def get_port_config_commands(
         self,
         interface: str,

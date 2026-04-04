@@ -123,7 +123,7 @@ def delete_switch(
 # ── Port Actions ───────────────────────────────────────────────────
 
 class PortActionRequest(BaseModel):
-    action: str           # shutdown, no_shutdown, port_cycle, vlan_assign, port_config_push
+    action: str           # shutdown, no_shutdown, port_cycle, poe_cycle, vlan_assign, port_config_push
     vlan: Optional[str] = None
     save_config: bool = False
     cycle_delay: int = 5
@@ -190,6 +190,14 @@ def port_action(
             conn.send_config_set(no_shut_cmds)
             commands = shut_cmds + ["! wait"] + no_shut_cmds
             action_label = "port_cycle"
+        elif req.action == "poe_cycle":
+            poe_off = plat.get_poe_off_command(port.interface)
+            conn.send_config_set(poe_off)
+            time.sleep(req.cycle_delay)
+            poe_on = plat.get_poe_on_command(port.interface)
+            conn.send_config_set(poe_on)
+            commands = poe_off + ["! wait"] + poe_on
+            action_label = "poe_cycle"
         elif req.action == "vlan_assign":
             if not req.vlan:
                 raise HTTPException(status_code=400, detail="VLAN required for vlan_assign")
@@ -242,7 +250,7 @@ def port_action(
 
         # Send commands (port_cycle and vlan_assign already sent above)
         cmd_warnings = []
-        if req.action not in ("port_cycle", "vlan_assign"):
+        if req.action not in ("port_cycle", "poe_cycle", "vlan_assign"):
             output = conn.send_config_set(commands)
             cmd_warnings = _check_config_output(output, commands)
             if cmd_warnings:
