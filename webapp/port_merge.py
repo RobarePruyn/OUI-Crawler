@@ -179,6 +179,32 @@ def merge_discovered_ports(
                 log_created(db, venue_id, "port", new_port.id, job_id)
                 new_count += 1
 
+    # --- Step 4: Propagate IPs across VSX/duplicate MAC entries ---
+    # When a device appears on multiple switches (e.g., VSX pair), only one
+    # gets a device record (resolved_macs dedup). Propagate the freshly
+    # resolved IP to any other port in the venue with the same MAC.
+    fresh_ips: dict[str, str] = {}
+    for dev in consolidated.values():
+        if dev.mac_address and dev.ip_address and dev.ip_address != "unknown":
+            fresh_ips[dev.mac_address] = dev.ip_address
+
+    if fresh_ips:
+        all_venue_ports = (
+            db.query(VenuePort)
+            .join(VenueSwitch)
+            .filter(VenueSwitch.venue_id == venue_id)
+            .filter(VenuePort.mac_address.in_(list(fresh_ips.keys())))
+            .all()
+        )
+        ip_propagated = 0
+        for port in all_venue_ports:
+            correct_ip = fresh_ips.get(port.mac_address)
+            if correct_ip and port.ip_address != correct_ip:
+                port.ip_address = correct_ip
+                ip_propagated += 1
+        if ip_propagated:
+            logger.info("Propagated IP updates to %d duplicate-MAC ports", ip_propagated)
+
     db.commit()
     logger.info(
         "Port merge for venue %d: %d devices consolidated, %d updated, %d new",
