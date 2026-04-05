@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{% block title %}OUI Port Mapper{% endblock %}</title>
+    <title>{% block title %}NetCaster{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <link rel="stylesheet" href="/static/style.css">
@@ -14,7 +14,7 @@
     {% if user is defined and user %}
     <nav class="top-nav">
         <div class="nav-bar">
-            <span class="brand">OUI Port Mapper</span>
+            <span class="brand">NetCaster</span>
             <button class="nav-toggle" onclick="this.nextElementSibling.classList.toggle('open')" aria-label="Menu">&#9776;</button>
             <div class="nav-links">
                 <ul>
@@ -47,7 +47,7 @@
     {% else %}
     <nav class="top-nav">
         <div class="nav-bar">
-            <span class="brand">OUI Port Mapper</span>
+            <span class="brand">NetCaster</span>
         </div>
     </nav>
     {% endif %}
@@ -57,7 +57,7 @@
     </main>
 
     <footer class="container">
-        <small>OUI Port Mapper v5.0 &mdash; Mediacast Network Solutions, Inc.</small>
+        <small>NetCaster v1.0 &mdash; Mediacast Network Solutions, Inc.</small>
     </footer>
 
     <script>

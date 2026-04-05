@@ -1,5 +1,5 @@
 """
-Platform abstraction layer for OUI Port Mapper.
+Platform abstraction layer for NetCaster.
 """
 import logging
 import re

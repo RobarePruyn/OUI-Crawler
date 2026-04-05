@@ -1,5 +1,5 @@
 """
-OUI Port Mapper Engine — core discovery and automation logic.
+NetCaster Engine — core discovery and automation logic.
 """
 import csv
 import ipaddress
@@ -2210,7 +2210,7 @@ class OUIPortMapper:
     @staticmethod
     def diff_csv(old_file: str, new_file: str) -> DiffResult:
         """
-        Compare two OUI Port Mapper CSV exports and return a DiffResult
+        Compare two CSV exports and return a DiffResult
         with added, removed, and moved devices. Keyed by MAC address.
         """
         def load_csv_rows(filename: str) -> list[dict]:

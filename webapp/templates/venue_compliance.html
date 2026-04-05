@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% set active_page = "venues" %}
-{% block title %}Compliance - {{ venue.name }} - OUI Port Mapper{% endblock %}
+{% block title %}Compliance - {{ venue.name }} - NetCaster{% endblock %}
 {% block content %}
 <h1>Compliance: {{ venue.name }}</h1>
 <p>Based on persistent port state &mdash; last updated from network scans.</p>
@@ -338,18 +338,22 @@ async function pushSelected() {
     if (!checks.length) { alert('No violations selected.'); return; }
 
     const count = checks.length;
-    if (!confirm('Push VLAN changes to ' + count + ' port(s)?')) return;
+    if (!confirm('Push VLAN + full port policy to ' + count + ' port(s)?')) return;
 
     const btn = document.getElementById('btn-push');
     const status = document.getElementById('push-status');
     btn.setAttribute('aria-busy', 'true');
     btn.disabled = true;
-    status.textContent = 'Pushing to switches...';
+    status.textContent = 'Pushing VLAN + port policy to switches...';
     document.getElementById('push-summary').style.display = 'none';
 
     const actions = [];
     for (const cb of checks) {
-        actions.push({port_id: parseInt(cb.dataset.portId), action: 'vlan_assign', vlan: cb.dataset.vlan});
+        const portId = parseInt(cb.dataset.portId);
+        const vlan = cb.dataset.vlan;
+        // Push VLAN assignment first, then full port policy in one batch
+        actions.push({port_id: portId, action: 'vlan_assign', vlan: vlan});
+        actions.push({port_id: portId, action: 'port_config_push'});
     }
 
     try {

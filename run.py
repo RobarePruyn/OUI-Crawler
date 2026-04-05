@@ -1,4 +1,4 @@
-"""Entry point for the OUI Port Mapper web application."""
+"""Entry point for the NetCaster web application."""
 
 import uvicorn
 

@@ -1,8 +1,8 @@
 """
-OUI Port Mapper Engine — shared automation logic.
+NetCaster Engine — shared automation logic.
 
 This package contains the core discovery and automation engine
-used by both the standalone CLI and the web application.
+used by the NetCaster web application.
 """
 from .models import (
     DeviceRecord,

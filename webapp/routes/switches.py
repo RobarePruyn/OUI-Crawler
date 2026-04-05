@@ -526,6 +526,9 @@ def batch_port_action(
                             "old_vlan": port.vlan,
                             "new_vlan": action.vlan,
                         })
+                        # Update in-memory so subsequent port_config_push
+                        # for the same port finds the correct policy
+                        port.vlan = action.vlan
                         local_actions_log.append(
                             f"{switch.hostname} {port.interface}: VLAN {port.vlan} → {action.vlan}"
                         )

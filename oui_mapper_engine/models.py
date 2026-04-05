@@ -1,5 +1,5 @@
 """
-Data models for OUI Port Mapper engine.
+Data models for NetCaster engine.
 """
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any

@@ -339,7 +339,7 @@ async function compPushSelected() {
     if (!checks.length) { alert('No violations selected.'); return; }
 
     const count = checks.length;
-    if (!confirm('Push VLAN changes to ' + count + ' port(s)?')) return;
+    if (!confirm('Push VLAN + port policy to ' + count + ' port(s)?')) return;
 
     const btn = document.getElementById('btn-push');
     const status = document.getElementById('push-status');
@@ -350,7 +350,10 @@ async function compPushSelected() {
 
     const actions = [];
     for (const cb of checks) {
-        actions.push({port_id: parseInt(cb.dataset.portId), action: 'vlan_assign', vlan: cb.dataset.vlan});
+        const portId = parseInt(cb.dataset.portId);
+        const vlan = cb.dataset.vlan;
+        actions.push({port_id: portId, action: 'vlan_assign', vlan: vlan});
+        actions.push({port_id: portId, action: 'port_config_push'});
     }
 
     try {
