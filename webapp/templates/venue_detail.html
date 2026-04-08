@@ -110,6 +110,9 @@
 {# ── Action bar ── #}
 <div style="display:flex;gap:0.5rem;margin-bottom:1rem;">
     <button class="outline" onclick="venueScan()">Run Scan</button>
+    <form method="post" action="/venues/{{ venue.id }}/duplicate" style="margin:0;">
+        <button type="submit" class="outline secondary" style="width:auto;">Duplicate Venue</button>
+    </form>
 </div>
 <div id="venue-action-result"></div>
 
@@ -118,11 +121,12 @@
     <ul>
         <li><a href="#" class="tab-link active" data-tab="tab-switches">Switches</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-timeline">Timeline</a></li>
-        <li><a href="#" class="tab-link" data-tab="tab-schedules">Schedules</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-compliance">Compliance</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-vlans">VLANs</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-oui">OUI Registry</a></li>
         <li><a href="#" class="tab-link" data-tab="tab-policies">Port Policies</a></li>
-        <li><a href="#" class="tab-link" data-tab="tab-compliance">Compliance</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-schedules">Schedules</a></li>
+        <li><a href="#" class="tab-link" data-tab="tab-config">Config</a></li>
     </ul>
 </nav>
 
@@ -178,10 +182,8 @@
     </div>
 </div>
 
-{# ── Venue Configuration (collapsed) ── #}
-<hr>
-<details class="form-section">
-    <summary><h3 style="display:inline;cursor:pointer;">Venue Configuration</h3></summary>
+<!-- Config Tab -->
+<div id="tab-config" class="tab-panel" style="display:none;">
     <form id="venue-form" method="post" action="/venues/{{ venue.id }}" style="margin-top:0.75rem;">
         <div class="form-section">
             <h3>Connection</h3>
@@ -280,9 +282,24 @@
             <span id="test-result" style="font-size:0.85rem;"></span>
         </div>
     </form>
-</details>
+</div>
 
 <script>
+// Tab scroll overflow indicator
+(function() {
+    const tabScroll = document.querySelector('.tab-scroll');
+    if (tabScroll) {
+        function checkTabOverflow() {
+            tabScroll.classList.toggle('has-overflow',
+                tabScroll.scrollWidth > tabScroll.clientWidth &&
+                tabScroll.scrollLeft + tabScroll.clientWidth < tabScroll.scrollWidth - 2);
+        }
+        checkTabOverflow();
+        tabScroll.addEventListener('scroll', checkTabOverflow);
+        window.addEventListener('resize', checkTabOverflow);
+    }
+})();
+
 // Tab switching — lazy-load content on first view via htmx.ajax
 document.querySelectorAll('.tab-link').forEach(link => {
     link.addEventListener('click', function(e) {

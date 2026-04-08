@@ -7,8 +7,8 @@
 <div class="form-section">
     <h3>Search</h3>
     <div class="grid">
-        <label class="required">
-            Venue
+        <label>
+            <span class="required">Venue</span>
             <select id="venue-select" required>
                 <option value="">-- Select venue --</option>
                 {% for v in venues %}
@@ -17,14 +17,14 @@
             </select>
             <small class="field-help">Credentials and core switch come from the venue</small>
         </label>
-        <label class="required">
-            MAC or IP Address
+        <label>
+            <span class="required">MAC or IP Address</span>
             <input type="text" id="search-term" placeholder="4ca0.03 or 10.2.1 or full address" required>
             <small class="field-help">Partial or full MAC/IP. Partial searches the DB; full does a live SSH lookup.</small>
         </label>
     </div>
     <div style="display:flex;gap:0.5rem;">
-        <button type="button" id="btn-search" disabled>Search</button>
+        <button type="button" id="btn-search" class="btn-primary-blue" disabled>Search</button>
         <button type="button" id="btn-lookup" class="outline" disabled>Live Lookup</button>
     </div>
 </div>

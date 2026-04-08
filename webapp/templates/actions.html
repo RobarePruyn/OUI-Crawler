@@ -1,6 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Actions - NetCaster{% endblock %}
 {% block content %}
+{% if job.venue %}
+<nav aria-label="breadcrumb">
+    <a href="/venues">Venues</a> &rsaquo;
+    <a href="/venues/{{ job.venue.id }}">{{ job.venue.name }}</a> &rsaquo;
+    <a href="/jobs/{{ job.id }}">{{ job.job_type | title }}</a> &rsaquo;
+    Port Actions
+</nav>
+{% endif %}
 <h1>Port Actions</h1>
 <p>Source job: <a href="/jobs/{{ job.id }}">{{ job.id[:8] }}...</a> ({{ job.job_type }}, {{ job.devices_found }} devices)</p>
 

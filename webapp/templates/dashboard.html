@@ -47,7 +47,16 @@
 </div>
 
 <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:0.5rem;">
-    <h2 style="margin-bottom:0;">Recent Jobs</h2>
+    <div style="display:flex;align-items:center;gap:0.75rem;">
+        <h2 style="margin-bottom:0;">Recent Jobs</h2>
+        <div class="refresh-toggle">
+            <button type="button" class="active" onclick="setRefresh(0, this)">Off</button>
+            <button type="button" onclick="setRefresh(30, this)">30s</button>
+            <button type="button" onclick="setRefresh(60, this)">1m</button>
+            <button type="button" onclick="setRefresh(300, this)">5m</button>
+        </div>
+        <small id="last-updated" class="text-muted" style="font-size:0.75rem;"></small>
+    </div>
     {% if jobs %}
     <input type="search" placeholder="Filter jobs..." oninput="filterTable(this, 'jobs-table')" style="margin:0;padding:0.2rem 0.5rem;width:14rem;font-size:0.8rem;">
     {% endif %}
@@ -98,6 +107,39 @@
 {% else %}
 <p class="text-muted">No jobs yet for this venue. Start a scan to get going.</p>
 {% endif %}
+
+<script>
+let _refreshTimer = null;
+function setRefresh(seconds, btn) {
+    if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+    document.querySelectorAll('.refresh-toggle button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    localStorage.setItem('dashboard_refresh', seconds);
+    const el = document.getElementById('last-updated');
+    if (seconds > 0) {
+        _refreshTimer = setInterval(function() {
+            location.reload();
+        }, seconds * 1000);
+        el.textContent = 'refreshing every ' + (seconds >= 60 ? (seconds/60) + 'm' : seconds + 's');
+    } else {
+        el.textContent = '';
+    }
+}
+// Restore saved preference
+(function() {
+    const saved = parseInt(localStorage.getItem('dashboard_refresh') || '0');
+    if (saved > 0) {
+        const btns = document.querySelectorAll('.refresh-toggle button');
+        btns.forEach(function(b) {
+            if ((saved === 30 && b.textContent === '30s') ||
+                (saved === 60 && b.textContent === '1m') ||
+                (saved === 300 && b.textContent === '5m')) {
+                setRefresh(saved, b);
+            }
+        });
+    }
+})();
+</script>
 
 {% elif venues %}
 {# ── Super admin: no venue selected, show venue cards ────────── #}

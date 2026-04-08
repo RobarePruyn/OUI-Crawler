@@ -24,10 +24,15 @@ main.container {
 nav.top-nav {
     background: var(--opm-nav-bg);
     padding: 0 1rem;
-    position: sticky;
+    position: fixed;
     top: 0;
+    left: 0;
+    right: 0;
     z-index: 100;
-    max-width: 100%;
+}
+
+body {
+    padding-top: 2.75rem;
 }
 
 nav.top-nav ul {
@@ -68,12 +73,26 @@ nav.top-nav a.active {
     color: #fff;
 }
 
+nav.top-nav a.nav-icon {
+    color: var(--opm-nav-text);
+    font-size: 1.1rem;
+    padding: 0.25rem 0.4rem;
+    line-height: 1;
+    border: none;
+    background: none;
+}
+
+nav.top-nav a.nav-icon:hover {
+    color: #f1f5f9;
+    background: none;
+}
+
 nav.top-nav a.nav-logout {
     border: 1px solid rgba(255, 255, 255, 0.2);
     color: rgba(255, 255, 255, 0.5);
     font-size: 0.78rem;
     padding: 0.25rem 0.5rem;
-    margin-left: 0.5rem;
+    margin-left: 0;
 }
 
 nav.top-nav a.nav-logout:hover {
@@ -85,6 +104,7 @@ nav.top-nav a.nav-logout:hover {
 nav.top-nav .nav-bar {
     display: flex;
     align-items: center;
+    width: 100%;
 }
 
 nav.top-nav .nav-links {
@@ -182,9 +202,14 @@ nav.top-nav .nav-right {
         gap: 0.25rem;
     }
 
-    nav.top-nav a.nav-logout {
+    nav.top-nav a.nav-logout,
+    nav.top-nav a.nav-icon {
         margin-left: 0;
         width: fit-content;
+    }
+
+    body {
+        padding-top: 2.75rem;
     }
 
     .venue-indicator select {
@@ -287,7 +312,8 @@ footer {
     color: var(--pico-muted-color);
 }
 
-label.required::after {
+label.required::after,
+span.required::after {
     content: " *";
     color: var(--pico-del-color);
     font-weight: 600;
@@ -633,4 +659,147 @@ abbr[title] {
 
 .nowrap {
     white-space: nowrap;
+}
+
+/* ── Primary button (blue) ───────────────────��──────────────────── */
+
+button.btn-primary-blue,
+button[type="button"].btn-primary-blue {
+    background: var(--opm-nav-active);
+    color: #fff;
+    border-color: var(--opm-nav-active);
+}
+
+button.btn-primary-blue:hover {
+    background: #2563eb;
+    border-color: #2563eb;
+}
+
+/* ── Nested port table scroll wrapper ───────────────────────────── */
+
+.port-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    position: relative;
+}
+
+.port-table-wrap::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 2rem;
+    background: linear-gradient(to right, transparent, var(--pico-card-background-color));
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.port-table-wrap.has-scroll::after {
+    opacity: 1;
+}
+
+/* ── Tab scroll indicator ───────────────────────────────────────── */
+
+.tab-scroll {
+    position: relative;
+}
+
+.tab-scroll::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 2rem;
+    background: linear-gradient(to right, transparent, var(--pico-background-color));
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.tab-scroll.has-overflow::after {
+    opacity: 1;
+}
+
+/* ── Breadcrumbs ────────────────────────────────────────────────── */
+
+nav[aria-label="breadcrumb"] {
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+nav[aria-label="breadcrumb"] a {
+    color: var(--opm-nav-active);
+    text-decoration: none;
+}
+
+nav[aria-label="breadcrumb"] a:hover {
+    text-decoration: underline;
+}
+
+/* ── Switch status summary bar ──────────────────────────────────── */
+
+.switch-summary {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    font-size: 0.85rem;
+    margin-bottom: 0.5rem;
+}
+
+.switch-summary .count-online { color: #2d6a4f; font-weight: 600; }
+.switch-summary .count-offline { color: #e76f51; font-weight: 600; cursor: pointer; }
+.switch-summary .count-total { color: var(--pico-muted-color); }
+
+/* ── Port mini-grid ─────────────────────────────────────────────── */
+
+.port-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    max-width: 160px;
+}
+
+.port-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+}
+
+.port-dot-matched { background: #2d6a4f; }
+.port-dot-empty   { background: #d1d5db; }
+.port-dot-issue   { background: #e76f51; }
+.port-dot-uplink  { background: var(--opm-nav-active); }
+
+/* ── Auto-refresh toggle ────────────────────────────────────────── */
+
+.refresh-toggle {
+    display: inline-flex;
+    border: 1px solid var(--opm-border);
+    border-radius: 6px;
+    overflow: hidden;
+    font-size: 0.75rem;
+    vertical-align: middle;
+}
+
+.refresh-toggle button {
+    margin: 0;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.75rem;
+    border: none;
+    border-right: 1px solid var(--opm-border);
+    background: none;
+    color: var(--pico-muted-color);
+    cursor: pointer;
+    width: auto;
+    border-radius: 0;
+}
+
+.refresh-toggle button:last-child { border-right: none; }
+
+.refresh-toggle button.active {
+    background: var(--opm-nav-active);
+    color: #fff;
 }

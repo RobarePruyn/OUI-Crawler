@@ -81,7 +81,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="NetCaster", version="1.0", lifespan=lifespan)
+    app = FastAPI(title="NetCaster", version="2.0", lifespan=lifespan)
 
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 

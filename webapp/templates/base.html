@@ -25,7 +25,6 @@
                     <li><a href="/discovery" {% if active_page == "discovery" %}class="active"{% endif %}>Scan</a></li>
                     <li><a href="/lookup" {% if active_page == "lookup" %}class="active"{% endif %}>Lookup</a></li>
                     <li><a href="/diff" {% if active_page == "reports" or active_page == "diff" %}class="active"{% endif %}>Reports</a></li>
-                    <li><a href="/settings" {% if active_page == "settings" %}class="active"{% endif %}>Settings</a></li>
                 </ul>
                 <div class="nav-right">
                     {% if nav_venues is defined and nav_venues|length > 1 %}
@@ -39,6 +38,7 @@
                     {% elif selected_venue is defined and selected_venue %}
                     <span class="venue-indicator venue-label">{{ selected_venue.name }}</span>
                     {% endif %}
+                    <a href="/settings" class="nav-icon" title="Settings" {% if active_page == "settings" %}style="color:#f1f5f9;"{% endif %}>&#x2699;</a>
                     <a href="/logout" class="nav-logout">Logout</a>
                 </div>
             </div>
@@ -57,7 +57,7 @@
     </main>
 
     <footer class="container">
-        <small>NetCaster v1.0 &mdash; Mediacast Network Solutions, Inc.</small>
+        <small>NetCaster v2.0 &mdash; Mediacast Network Solutions, Inc.</small>
     </footer>
 
     <script>

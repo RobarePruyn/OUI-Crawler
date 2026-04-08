@@ -8,6 +8,7 @@
     <input type="search" placeholder="Filter ports..." oninput="filterTable(this, 'port-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
     <button type="button" class="outline secondary" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;" onclick="exportTableCSV('port-table', 'ports.csv')">CSV</button>
 </div>
+<div class="port-table-wrap" id="port-table-wrap">
 <table id="port-table" style="margin-bottom:0;">
     <thead>
         <tr>
@@ -71,6 +72,24 @@
         {% endfor %}
     </tbody>
 </table>
+</div>
+
+<script>
+// Detect horizontal overflow and show scroll hint
+(function() {
+    const wrap = document.getElementById('port-table-wrap');
+    if (wrap) {
+        function checkScroll() {
+            const hasScroll = wrap.scrollWidth > wrap.clientWidth;
+            const atEnd = wrap.scrollLeft + wrap.clientWidth >= wrap.scrollWidth - 2;
+            wrap.classList.toggle('has-scroll', hasScroll && !atEnd);
+        }
+        checkScroll();
+        wrap.addEventListener('scroll', checkScroll);
+        window.addEventListener('resize', checkScroll);
+    }
+})();
+</script>
 
 <script>
 function portAction(portId, venueId, action) {

@@ -85,6 +85,28 @@ def _check_config_output(output: str, commands: list[str]) -> list[str]:
     return errors
 
 
+def build_port_grids(switches: list[VenueSwitch]) -> dict[int, list[str]]:
+    """Compute per-switch port status dots for the switches list mini-grid.
+
+    Each port becomes one of: "uplink" (notes mention uplink/trunk),
+    "matched" (has an OUI match), or "empty" (MAC seen but unmatched).
+    Ports with no MAC are omitted.
+    """
+    port_grids: dict[int, list[str]] = {}
+    for sw in switches:
+        dots = []
+        for p in sw.ports:
+            notes = (p.notes or "").lower()
+            if "uplink" in notes or "trunk" in notes:
+                dots.append("uplink")
+            elif p.matched_oui:
+                dots.append("matched")
+            elif p.mac_address:
+                dots.append("empty")
+        port_grids[sw.id] = dots
+    return port_grids
+
+
 def _render_switches_partial(request: Request, db: Session, venue: Venue) -> HTMLResponse:
     switches = (
         db.query(VenueSwitch)
@@ -93,7 +115,9 @@ def _render_switches_partial(request: Request, db: Session, venue: Venue) -> HTM
         .all()
     )
     return templates.TemplateResponse(
-        request, "partials/switches.html", {"venue": venue, "switches": switches}
+        request,
+        "partials/switches.html",
+        {"venue": venue, "switches": switches, "port_grids": build_port_grids(switches)},
     )
 
 

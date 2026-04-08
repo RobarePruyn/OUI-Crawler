@@ -9,6 +9,17 @@
 </div>
 
 {% if switches %}
+{% set online_count = switches | selectattr("online") | list | length %}
+{% set offline_count = switches | rejectattr("online") | list | length %}
+<div class="switch-summary">
+    <span class="count-online">{{ online_count }} online</span>
+    <span>&middot;</span>
+    {% if offline_count > 0 %}
+    <span class="count-offline" onclick="filterSwitches('offline')">{{ offline_count }} offline</span>
+    <span>&middot;</span>
+    {% endif %}
+    <span class="count-total">{{ switches | length }} total</span>
+</div>
 <figure>
 <table id="switches-table">
     <thead>
@@ -19,6 +30,7 @@
             <th>Platform</th>
             <th>Upstream</th>
             <th>Ports</th>
+            <th>Port Map</th>
             <th>Last Seen</th>
             <th>Source</th>
             <th></th>
@@ -26,7 +38,7 @@
     </thead>
     <tbody>
         {% for s in switches %}
-        <tr>
+        <tr data-online="{{ '1' if s.online else '0' }}">
             <td>
                 {% if s.online %}
                     <span class="badge badge-online">online</span>
@@ -49,6 +61,15 @@
                 {% else %}-{% endif %}
             </td>
             <td>{{ s.ports | length }}</td>
+            <td>
+                {% if port_grids is defined and port_grids.get(s.id) %}
+                <div class="port-grid">
+                    {% for dot in port_grids[s.id] %}
+                    <span class="port-dot port-dot-{{ dot }}"></span>
+                    {% endfor %}
+                </div>
+                {% else %}-{% endif %}
+            </td>
             <td><small>{{ s.last_seen_at | localtime }}</small></td>
             <td>{{ s.source }}</td>
             <td style="white-space:nowrap;">
@@ -62,7 +83,7 @@
         </tr>
         <!-- Port drill-down row (hidden, loaded on demand) -->
         <tr id="ports-row-{{ s.id }}" style="display:none;">
-            <td colspan="9" style="padding:0.5rem 1rem;background:var(--pico-card-background-color);">
+            <td colspan="10" style="padding:0.5rem 1rem;background:var(--pico-card-background-color);">
                 <div id="ports-content-{{ s.id }}">
                     <article aria-busy="true">Loading ports...</article>
                 </div>
@@ -77,6 +98,24 @@
 {% endif %}
 
 <script>
+let _offlineFilter = false;
+function filterSwitches(mode) {
+    _offlineFilter = !_offlineFilter;
+    document.querySelectorAll('#switches-table tbody tr[data-online]').forEach(function(row) {
+        if (_offlineFilter && mode === 'offline') {
+            const portsRow = row.nextElementSibling;
+            if (row.dataset.online === '1') {
+                row.style.display = 'none';
+                if (portsRow && portsRow.id && portsRow.id.startsWith('ports-row-')) portsRow.style.display = 'none';
+            } else {
+                row.style.display = '';
+            }
+        } else {
+            row.style.display = '';
+        }
+    });
+}
+
 const _portsLoaded = {};
 function togglePorts(evt, switchId, venueId) {
     evt.preventDefault();

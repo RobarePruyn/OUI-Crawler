@@ -1,4 +1,5 @@
 # Python
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -19,3 +20,6 @@ Thumbs.db
 
 # Database
 *.db
+
+# Legacy server configuration import (not for version control)
+Legacy Config/

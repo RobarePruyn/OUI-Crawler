@@ -399,6 +399,77 @@ async def venue_update_action(
     return _render(request, "venue_detail.html", {"user": user, "venue": venue, "message": "Venue updated."})
 
 
+@router.post("/venues/{venue_id}/duplicate")
+def venue_duplicate_action(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_venue_access(user, venue_id, db)
+    src = db.query(Venue).get(venue_id)
+    if not src:
+        raise HTTPException(status_code=404, detail="Venue not found")
+
+    new_venue = Venue(
+        name=f"{src.name} (copy)",
+        core_ip="",
+        platform=src.platform,
+        ssh_username=src.ssh_username,
+        ssh_password_enc=src.ssh_password_enc,
+        enable_secret_enc=src.enable_secret_enc,
+        mgmt_subnet=src.mgmt_subnet,
+        fan_out=src.fan_out,
+        workers=src.workers,
+        mac_threshold=src.mac_threshold,
+        default_dhcp_servers=src.default_dhcp_servers,
+        default_dns_servers=src.default_dns_servers,
+        default_gateway_mac=src.default_gateway_mac,
+    )
+    db.add(new_venue)
+    db.flush()
+
+    # Copy OUI entries
+    for oui in db.query(OUIEntry).filter(OUIEntry.venue_id == venue_id).all():
+        db.add(OUIEntry(
+            venue_id=new_venue.id,
+            oui_prefix=oui.oui_prefix,
+            manufacturer=oui.manufacturer,
+            description=oui.description,
+            candidate_vlans=oui.candidate_vlans,
+            expected_ips=oui.expected_ips,
+        ))
+
+    # Copy VLANs
+    for vlan in db.query(VenueVlan).filter(VenueVlan.venue_id == venue_id).all():
+        db.add(VenueVlan(
+            venue_id=new_venue.id,
+            vlan_id=vlan.vlan_id,
+            name=vlan.name,
+            ip_address=vlan.ip_address,
+            gateway_ip=vlan.gateway_ip,
+            gateway_mac=vlan.gateway_mac,
+            dhcp_servers=vlan.dhcp_servers,
+            dns_servers=vlan.dns_servers,
+        ))
+
+    # Copy port policies
+    for pol in db.query(PortPolicy).filter(PortPolicy.venue_id == venue_id).all():
+        db.add(PortPolicy(
+            venue_id=new_venue.id,
+            vlan=pol.vlan,
+            portfast=pol.portfast,
+            bpdu_guard=pol.bpdu_guard,
+            storm_control=pol.storm_control,
+            storm_control_level=pol.storm_control_level,
+            description_template=pol.description_template,
+            notes=pol.notes,
+        ))
+
+    db.commit()
+    return RedirectResponse(f"/venues/{new_venue.id}", status_code=303)
+
+
 @router.post("/venues/{venue_id}/delete")
 def venue_delete_action(
     venue_id: int,
@@ -497,7 +568,10 @@ def switches_partial(
         .order_by(VenueSwitch.hostname)
         .all()
     )
-    return _render(request, "partials/switches.html", {"venue": venue, "switches": switches})
+    from .switches import build_port_grids
+    return _render(request, "partials/switches.html", {
+        "venue": venue, "switches": switches, "port_grids": build_port_grids(switches),
+    })
 
 
 @router.get("/partials/switches/{venue_id}/{switch_id}/ports", response_class=HTMLResponse)
