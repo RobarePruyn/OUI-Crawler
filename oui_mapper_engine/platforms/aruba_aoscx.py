@@ -515,14 +515,22 @@ class ArubaAOSCXPlatform(SwitchPlatform):
 
         try:
             sysout = connection.send_command("show system", read_timeout=20) or ""
+            # AOS-CX formats MAC as `xxxxxx-xxxxxx` (6-6 dashed); also
+            # accept colon/dot/standard-dash variants for future-proofing.
             mac_m = re.search(
-                r'Base MAC Address\s*[:\s]\s*'
-                r'([0-9a-fA-F]{2}(?:[:\.-][0-9a-fA-F]{2}){5})',
+                r'Base\s+MAC(?:\s+Address)?\s*:\s*'
+                r'([0-9a-fA-F]{6}-[0-9a-fA-F]{6}'
+                r'|[0-9a-fA-F]{2}(?:[:\.-][0-9a-fA-F]{2}){5})',
                 sysout, re.IGNORECASE,
             )
             if mac_m:
                 base_mac = _normalize_mac(mac_m.group(1))
-            sn_m = re.search(r'Serial Number\s*[:\s]\s*(\S+)', sysout, re.IGNORECASE)
+            # AOS-CX field is `Chassis Serial Nbr`; also accept
+            # `Serial Number` for platforms that use that label.
+            sn_m = re.search(
+                r'(?:Chassis\s+Serial\s+Nbr|Serial\s+Number)\s*:\s*(\S+)',
+                sysout, re.IGNORECASE,
+            )
             if sn_m:
                 serials.append(sn_m.group(1).strip())
         except Exception:
