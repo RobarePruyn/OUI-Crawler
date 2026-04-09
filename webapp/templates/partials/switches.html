@@ -4,6 +4,11 @@
     <div style="display:flex;gap:0.5rem;align-items:center;">
         <input type="search" placeholder="Filter switches..." oninput="filterTable(this, 'switches-table')" style="margin:0;padding:0.2rem 0.5rem;width:12rem;font-size:0.8rem;">
         <a href="/api/venues/{{ venue.id }}/switches/csv" class="outline secondary" role="button" style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;text-decoration:none;">CSV</a>
+        <button type="button" class="outline secondary"
+                style="padding:0.2rem 0.5rem;width:auto;font-size:0.75rem;margin:0;color:#b91c1c;border-color:#b91c1c;"
+                hx-delete="/api/venues/{{ venue.id }}/switches"
+                hx-target="#venue-switches" hx-swap="innerHTML"
+                hx-confirm="Delete ALL {{ switches | length }} switches and their port history in this venue? This cannot be undone.">Delete all</button>
     </div>
     {% endif %}
 </div>

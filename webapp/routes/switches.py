@@ -121,6 +121,26 @@ def _render_switches_partial(request: Request, db: Session, venue: Venue) -> HTM
     )
 
 
+@router.delete("/api/venues/{venue_id}/switches", response_class=HTMLResponse)
+def delete_all_switches(
+    venue_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only")
+    switches = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue_id).all()
+    count = len(switches)
+    for sw in switches:
+        db.delete(sw)
+    db.commit()
+    logger.info("Deleted all %d switches in venue %d (by %s)",
+                count, venue_id, user.username)
+    venue = db.query(Venue).get(venue_id)
+    return _render_switches_partial(request, db, venue)
+
+
 @router.delete("/api/venues/{venue_id}/switches/{switch_id}", response_class=HTMLResponse)
 def delete_switch(
     venue_id: int,
