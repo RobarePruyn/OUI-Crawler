@@ -832,6 +832,24 @@ def trigger_system_update(
     }
 
 
+@router.post("/api/system/update/check")
+def force_update_check(
+    user: User = Depends(get_current_user),
+):
+    """Force a synchronous update check (bypasses the 15-min poll)."""
+    if user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="super_admin required")
+    from ..updates import check_now
+    s = check_now()
+    return {
+        "current_version": s.current_version,
+        "current_sha": s.current_sha[:7],
+        "latest_sha": s.latest_sha[:7],
+        "update_available": s.update_available,
+        "error": s.error,
+    }
+
+
 @router.get("/api/system/update/status")
 def get_update_status(
     user: User = Depends(get_current_user),

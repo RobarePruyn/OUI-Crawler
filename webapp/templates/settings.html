@@ -21,6 +21,41 @@
         </label>
     </div>
 </form>
+
+<h3 style="margin-top:1.5rem;">Version & Updates</h3>
+<div id="version-info" style="font-size:0.9rem;color:var(--pico-muted-color);">
+    {% if update_state is defined %}
+    Running <strong>{{ update_state.current_version }}</strong>
+    {% if update_state.current_sha %}(<code>{{ update_state.current_sha[:7] }}</code>){% endif %}
+    {% if update_state.update_available %}
+     &mdash; update available: <strong>{{ update_state.latest_version }}</strong>
+     <em>{{ update_state.latest_message }}</em>
+    {% elif update_state.latest_sha %}
+     &mdash; up to date.
+    {% endif %}
+    {% if update_state.error %}
+     <br><small style="color:var(--pico-del-color);">Last check error: {{ update_state.error }}</small>
+    {% endif %}
+    {% if update_state.last_update_status %}
+     <br><small>Last update: {{ update_state.last_update_status }}</small>
+    {% endif %}
+    {% endif %}
+</div>
+<button type="button" onclick="manualUpdateCheck(this)" style="width:auto;margin-top:0.5rem;">Check for updates now</button>
+<script>
+function manualUpdateCheck(btn) {
+    btn.disabled = true;
+    btn.textContent = 'Checking…';
+    fetch('/api/system/update/check', {method: 'POST'})
+        .then(r => r.json())
+        .then(() => window.location.reload())
+        .catch(err => {
+            alert('Check failed: ' + err);
+            btn.disabled = false;
+            btn.textContent = 'Check for updates now';
+        });
+}
+</script>
 <hr>
 {% endif %}
 
