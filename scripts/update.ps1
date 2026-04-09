@@ -47,24 +47,41 @@ try { Remove-Item $FlagFile -Force -ErrorAction Stop } catch {
 
 try {
     Write-Log "Stopping $ServiceName"
-    & $NssmExe stop $ServiceName | Out-Null
+    & $NssmExe stop $ServiceName *>&1 | Out-Null
 
     Write-Log "Running git pull in $InstallDir"
     Push-Location $InstallDir
     try {
-        $pullOutput = & git pull 2>&1
+        # External commands: git and pip both write informational output
+        # to stderr (e.g. "From https://github.com/..."). Under
+        # $ErrorActionPreference='Stop' that triggers a spurious throw,
+        # so we temporarily downgrade to Continue and rely on
+        # $LASTEXITCODE for real failure detection.
+        $prevErrAction = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+
+        $pullOutput = (& git pull 2>&1) -join "`n"
+        $pullExit = $LASTEXITCODE
         Write-Log "git: $pullOutput"
-        if ($LASTEXITCODE -ne 0) { throw "git pull failed: $pullOutput" }
+        if ($pullExit -ne 0) {
+            $ErrorActionPreference = $prevErrAction
+            throw "git pull failed (exit $pullExit): $pullOutput"
+        }
 
         Write-Log "Installing/updating dependencies"
-        $pipOutput = & $VenvPython -m pip install --quiet -r requirements.txt 2>&1
-        if ($LASTEXITCODE -ne 0) { throw "pip install failed: $pipOutput" }
+        $pipOutput = (& $VenvPython -m pip install --quiet -r requirements.txt 2>&1) -join "`n"
+        $pipExit = $LASTEXITCODE
+        if ($pipExit -ne 0) {
+            $ErrorActionPreference = $prevErrAction
+            throw "pip install failed (exit $pipExit): $pipOutput"
+        }
+        $ErrorActionPreference = $prevErrAction
 
         $version = (Get-Content (Join-Path $InstallDir "VERSION") -ErrorAction SilentlyContinue).Trim()
         if (-not $version) { $version = "unknown" }
 
         Write-Log "Starting $ServiceName"
-        & $NssmExe start $ServiceName | Out-Null
+        & $NssmExe start $ServiceName *>&1 | Out-Null
 
         Set-Status "OK: updated to $version"
         Write-Log "Update complete: $version"
@@ -76,6 +93,6 @@ try {
     Write-Log "Update failed: $err"
     Set-Status "FAILED: $err"
     # Make sure the service is running even if the update failed
-    try { & $NssmExe start $ServiceName | Out-Null } catch { }
+    try { & $NssmExe start $ServiceName *>&1 | Out-Null } catch { }
     exit 1
 }
