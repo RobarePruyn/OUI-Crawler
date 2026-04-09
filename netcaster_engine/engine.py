@@ -394,6 +394,19 @@ class NetCasterEngine:
 
     def discover(self) -> list[DeviceRecord]:
         """Entry point: start recursive discovery from the core switch."""
+        # Reset walk-dedup state so discovery runs its own independent
+        # walk. Full Scan runs inventory first, which populates
+        # visited_hostnames/visited_switches with every reachable switch
+        # — if we don't clear those here, _discover_switch would see
+        # the core as "already visited" and return immediately, making
+        # the entire discovery phase a silent no-op.
+        self.visited_hostnames = set()
+        self.visited_switches = {}
+        self.failed_connections = set()
+        self.discovered_records = []
+        self.resolved_macs = set()
+        self.port_census = {}
+
         self.log.info(f"Starting OUI discovery from {self.core_ip}")
         self.log.info(
             f"OUI prefixes: {', '.join(self.normalized_oui_list)}"
