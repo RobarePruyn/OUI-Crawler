@@ -622,9 +622,17 @@ class NetCasterEngine:
                 f"{len(matching_entries)}"
             )
 
-            if not matching_entries:
-                if not (self.fan_out and current_depth == 0):
-                    return
+            # Note: we used to early-return here when matching_entries was
+            # empty. We don't anymore — the port census build below needs
+            # to run for every visited switch so port_merge can refresh
+            # stale rows even when no OUI-matched MACs are present this
+            # run. The classification loop further down is now gated on
+            # matching_entries (or fan-out) instead.
+            skip_classification = (
+                not matching_entries
+                and not (self.fan_out and current_depth == 0)
+            )
+            if not matching_entries and self.fan_out and current_depth == 0:
                 self.log.info(
                     f"{indent}  No OUI matches here, but fan-out mode "
                     f"will check neighbors"
@@ -790,6 +798,9 @@ class NetCasterEngine:
 
             # --- Classify each matching MAC ---
             recurse_targets: dict[str, list[tuple[MacEntry, str]]] = {}
+
+            if skip_classification:
+                return
 
             for entry, matched_oui in matching_entries:
                 norm_port = platform.normalize_interface(entry.interface)
