@@ -28,6 +28,8 @@
             <th>Hostname</th>
             <th>Mgmt IP</th>
             <th>Platform</th>
+            <th>Serial</th>
+            <th>Base MAC</th>
             <th>Upstream</th>
             <th>Ports</th>
             <th>Port Map</th>
@@ -54,6 +56,8 @@
             </td>
             <td><code>{{ s.mgmt_ip or "-" }}</code></td>
             <td>{{ s.platform or "-" }}</td>
+            <td><small><code>{{ s.serial_number or "-" }}</code></small></td>
+            <td><small><code>{{ s.base_mac or "-" }}</code></small></td>
             <td>
                 {% if s.upstream_hostname %}
                     {{ s.upstream_hostname }}
@@ -83,7 +87,7 @@
         </tr>
         <!-- Port drill-down row (hidden, loaded on demand) -->
         <tr id="ports-row-{{ s.id }}" style="display:none;">
-            <td colspan="10" style="padding:0.5rem 1rem;background:var(--pico-card-background-color);">
+            <td colspan="12" style="padding:0.5rem 1rem;background:var(--pico-card-background-color);">
                 <div id="ports-content-{{ s.id }}">
                     <article aria-busy="true">Loading ports...</article>
                 </div>

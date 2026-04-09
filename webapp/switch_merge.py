@@ -233,12 +233,16 @@ def merge_discovered_switches(
                     venue_id, reason, old_hostname, disc_hostname,
                 )
 
+            # For upstream fields, preserve existing values when the
+            # discovered record doesn't carry them. _discover_switch
+            # (the device-discovery path) doesn't track upstream, so
+            # without this guard every rediscovery wipes the topology.
             new_vals = {
                 "mgmt_ip": sw.switch_ip or row.mgmt_ip,
                 "platform": sw.platform or row.platform,
-                "upstream_hostname": sw.upstream_hostname or "",
-                "upstream_ip": sw.upstream_ip or "",
-                "upstream_interface": sw.upstream_interface or "",
+                "upstream_hostname": (sw.upstream_hostname or row.upstream_hostname or ""),
+                "upstream_ip": (sw.upstream_ip or row.upstream_ip or ""),
+                "upstream_interface": (sw.upstream_interface or row.upstream_interface or ""),
                 "serial_number": (getattr(sw, "serial_number", "") or row.serial_number or ""),
                 "base_mac": (getattr(sw, "base_mac", "") or row.base_mac or ""),
             }
