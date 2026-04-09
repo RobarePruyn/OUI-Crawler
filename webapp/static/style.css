@@ -803,3 +803,21 @@ nav[aria-label="breadcrumb"] a:hover {
     background: var(--opm-nav-active);
     color: #fff;
 }
+
+/* Update-available pill in top nav */
+.update-pill {
+    display: inline-block;
+    padding: 0.15rem 0.6rem;
+    margin-right: 0.6rem;
+    background: #16a34a;
+    color: #fff !important;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background 0.15s;
+}
+.update-pill:hover {
+    background: #15803d;
+}

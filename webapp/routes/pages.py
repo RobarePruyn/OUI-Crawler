@@ -28,6 +28,11 @@ def _render(request: Request, template: str, context: dict = None, status_code: 
             ctx["selected_venue"] = next((v for v in ctx["nav_venues"] if v.id == selected_id), None)
         finally:
             db.close()
+    # Expose update state to base.html (super_admin only uses it, but the
+    # check is cheap enough to inject unconditionally)
+    if user and "update_state" not in ctx:
+        from ..updates import get_state
+        ctx["update_state"] = get_state()
     return templates.TemplateResponse(request, template, ctx, status_code=status_code)
 
 
@@ -792,6 +797,58 @@ def run_venue_compliance(
     config_results = check_port_config_compliance(db, venue_id)
     dup_results = check_duplicate_switches(db, venue_id)
     return {"ok": True, "count": len(vlan_results) + len(config_results) + len(dup_results)}
+
+
+# ── System / Updates ────────────────────────────────────────────────
+
+@router.post("/api/system/update")
+def trigger_system_update(
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    """Request an application self-update.
+
+    Writes an update flag file watched by a Windows Scheduled Task that
+    runs update.ps1 (git pull + service restart). The web process
+    intentionally does NOT perform the restart itself — it can't cleanly
+    restart under NSSM, and the scheduled task has the privileges.
+    """
+    if user.role != "super_admin":
+        raise HTTPException(status_code=403, detail="super_admin required")
+    from ..updates import request_update, get_state
+    state = get_state()
+    if not state.update_available:
+        return {"ok": False, "reason": "no_update_available"}
+    ok = request_update()
+    if not ok:
+        raise HTTPException(
+            status_code=500,
+            detail="Could not write update flag file. Check logs.",
+        )
+    return {
+        "ok": True,
+        "message": "Update queued. The service will restart in ~1 minute.",
+        "target_sha": state.latest_sha[:7],
+    }
+
+
+@router.get("/api/system/update/status")
+def get_update_status(
+    user: User = Depends(get_current_user),
+):
+    """Return current update state as JSON (for polling from the UI)."""
+    from ..updates import get_state
+    s = get_state()
+    return {
+        "current_version": s.current_version,
+        "current_sha": s.current_sha[:7],
+        "latest_version": s.latest_version,
+        "latest_sha": s.latest_sha[:7],
+        "latest_message": s.latest_message,
+        "update_available": s.update_available,
+        "last_update_status": s.last_update_status,
+        "error": s.error,
+    }
 
 
 # ── Settings ─────────────────────────────────────────────────────────

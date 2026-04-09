@@ -38,6 +38,11 @@
                     {% elif selected_venue is defined and selected_venue %}
                     <span class="venue-indicator venue-label">{{ selected_venue.name }}</span>
                     {% endif %}
+                    {% if user.role == "super_admin" and update_state is defined and update_state.update_available %}
+                    <a href="#" class="update-pill"
+                       title="Update NetCaster to {{ update_state.latest_version }} — {{ update_state.latest_message }}"
+                       onclick="triggerUpdate(event)">Update &#8594; {{ update_state.latest_version }}</a>
+                    {% endif %}
                     <a href="/settings" class="nav-icon" title="Settings" {% if active_page == "settings" %}style="color:#f1f5f9;"{% endif %}>&#x2699;</a>
                     <a href="/logout" class="nav-logout">Logout</a>
                 </div>
@@ -65,6 +70,26 @@
         fetch('/api/set-venue/' + venueId)
             .then(r => { if (!r.ok) throw new Error('Failed'); return r.json(); })
             .then(() => window.location.reload());
+    }
+    function triggerUpdate(evt) {
+        evt.preventDefault();
+        if (!confirm('Update NetCaster now?\n\nThe service will restart in about a minute. Any in-progress work will be cancelled.')) return;
+        fetch('/api/system/update', {method: 'POST'})
+            .then(r => r.json())
+            .then(data => {
+                if (data.ok) {
+                    alert('Update queued. NetCaster will restart shortly.\n\nThis page will reload automatically when the service is back.');
+                    setTimeout(pollForRestart, 20000);
+                } else {
+                    alert('Could not queue update: ' + (data.detail || data.reason || 'unknown error'));
+                }
+            })
+            .catch(err => alert('Update request failed: ' + err));
+    }
+    function pollForRestart() {
+        fetch('/api/system/update/status')
+            .then(r => { if (r.ok) window.location.reload(); else throw new Error(); })
+            .catch(() => setTimeout(pollForRestart, 5000));
     }
     </script>
 </body>

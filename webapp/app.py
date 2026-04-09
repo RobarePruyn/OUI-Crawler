@@ -91,14 +91,25 @@ async def lifespan(app: FastAPI):
     from .scheduler import init_scheduler, shutdown_scheduler
     init_scheduler()
 
+    from .updates import start_background_checker
+    start_background_checker()
+
     yield
     # Shutdown
     shutdown_scheduler()
     job_manager._pool.shutdown(wait=False)
 
 
+def _read_version() -> str:
+    from pathlib import Path
+    vf = Path(__file__).resolve().parent.parent / "VERSION"
+    if vf.exists():
+        return vf.read_text(encoding="utf-8").strip()
+    return "2.0"
+
+
 def create_app() -> FastAPI:
-    app = FastAPI(title="NetCaster", version="2.0", lifespan=lifespan)
+    app = FastAPI(title="NetCaster", version=_read_version(), lifespan=lifespan)
 
     app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 
