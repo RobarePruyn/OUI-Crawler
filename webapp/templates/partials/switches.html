@@ -73,15 +73,6 @@
             <td><small>{{ s.last_seen_at | localtime }}</small></td>
             <td>{{ s.source }}</td>
             <td style="white-space:nowrap;">
-                <select onchange="mergeSwitch({{ venue.id }}, {{ s.id }}, this)"
-                        style="padding:0.2rem 0.3rem;width:auto;font-size:0.75rem;margin:0 0.2rem 0 0;display:inline-block;">
-                    <option value="">Merge into…</option>
-                    {% for t in switches %}
-                        {% if t.id != s.id %}
-                        <option value="{{ t.id }}">{{ t.hostname }}</option>
-                        {% endif %}
-                    {% endfor %}
-                </select>
                 <form hx-delete="/api/venues/{{ venue.id }}/switches/{{ s.id }}"
                       hx-target="#venue-switches" hx-swap="innerHTML"
                       hx-confirm="Delete switch {{ s.hostname }} and all its port data?"
@@ -123,22 +114,6 @@ function filterSwitches(mode) {
             row.style.display = '';
         }
     });
-}
-
-function mergeSwitch(venueId, sourceId, select) {
-    const targetId = select.value;
-    if (!targetId) return;
-    const sourceName = select.closest('tr').querySelector('strong').textContent;
-    const targetName = select.options[select.selectedIndex].text;
-    if (!confirm('Merge ' + sourceName + ' into ' + targetName + '?\n\n' +
-                 'Ports from ' + sourceName + ' will be re-parented onto ' +
-                 targetName + ', and ' + sourceName + ' will be deleted.')) {
-        select.value = '';
-        return;
-    }
-    htmx.ajax('POST',
-        '/api/venues/' + venueId + '/switches/' + sourceId + '/merge-into/' + targetId,
-        {target: '#venue-switches', swap: 'innerHTML'});
 }
 
 const _portsLoaded = {};

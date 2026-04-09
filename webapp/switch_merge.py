@@ -11,8 +11,13 @@ Matching strategy (rename-safe, stack-aware):
      existing serial_number.
   3. **Base MAC** — discovered base_mac equals an existing base_mac.
      Stable across renames; unique per chassis.
-  4. **Hostname** (case-insensitive) — last-resort fallback for rows
-     that predate hardware-identity collection.
+  4. **Hostname** (case-insensitive) — fallback for rows that predate
+     hardware-identity collection.
+  5. **Mgmt IP** — last-resort legacy fallback, only fires when *both*
+     the discovered switch and the candidate row have no hardware
+     identity. This auto-absorbs pre-identity duplicate rows created
+     by hostname renames. Once either side has identity, IP is
+     ignored (IPs can legitimately be reassigned).
 
 When a match is found but the hostname differs, it's a **rename**:
 the existing row is kept (preserving port FKs and history), hostname
@@ -91,6 +96,79 @@ def _find_match(
     return None, ""
 
 
+def _row_has_identity(row: VenueSwitch) -> bool:
+    return bool(
+        (row.serial_number or "").strip()
+        or (row.base_mac or "").strip()
+        or _load_members(row)
+    )
+
+
+def _absorb_legacy_orphans(
+    db: Session,
+    venue_id: int,
+    winner: VenueSwitch,
+    existing: list[VenueSwitch],
+    job_id: str,
+) -> int:
+    """Fold identity-less duplicate rows into `winner`.
+
+    Called after a discovered switch has been matched to `winner` and
+    `winner` has been updated with hardware identity. Any other row in
+    the venue that (a) lacks identity and (b) shares mgmt_ip with
+    `winner` is treated as a legacy duplicate — its ports are
+    re-parented onto `winner` (dropping interface conflicts in favor
+    of `winner`'s version) and the row is deleted.
+
+    Returns the set of absorbed (and now deleted) row IDs.
+    """
+    from .db_models import ChangeLog, VenuePort
+
+    absorbed: set[int] = set()
+    if not _row_has_identity(winner):
+        return absorbed
+    winner_ip = (winner.mgmt_ip or "").strip()
+    if not winner_ip:
+        return absorbed
+
+    winner_interfaces = {
+        p.interface for p in db.query(VenuePort).filter(VenuePort.switch_id == winner.id).all()
+    }
+    for row in existing:
+        if row.id == winner.id or row.id in absorbed:
+            continue
+        if _row_has_identity(row):
+            continue
+        if (row.mgmt_ip or "").strip() != winner_ip:
+            continue
+
+        # Re-parent ports, dropping interface conflicts
+        for port in db.query(VenuePort).filter(VenuePort.switch_id == row.id).all():
+            if port.interface in winner_interfaces:
+                db.delete(port)
+            else:
+                port.switch_id = winner.id
+                winner_interfaces.add(port.interface)
+
+        db.add(ChangeLog(
+            venue_id=venue_id,
+            entity_type="switch",
+            entity_id=winner.id,
+            change_type="merged",
+            field_name="hostname",
+            old_value=row.hostname,
+            new_value=winner.hostname,
+            job_id=job_id,
+        ))
+        absorbed.add(row.id)
+        db.delete(row)
+        logger.info(
+            "Absorbed legacy orphan switch %r (id=%d) into %r (id=%d) in venue %d",
+            row.hostname, row.id, winner.hostname, winner.id, venue_id,
+        )
+    return absorbed
+
+
 def _log_rename(
     db: Session,
     venue_id: int,
@@ -127,8 +205,10 @@ def merge_discovered_switches(
 
     existing = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue_id).all()
     matched_ids: set[int] = set()
+    absorbed_ids: set[int] = set()
     new_count = 0
     rename_count = 0
+    absorbed_count = 0
 
     for sw in discovered_switches:
         if not (sw.switch_hostname or "").strip():
@@ -182,6 +262,15 @@ def merge_discovered_switches(
             row.online = True
             row.last_seen_at = now
             row.last_crawl_job_id = job_id
+
+            # Legacy-orphan absorption: if this row now has identity and
+            # there are other identity-less rows in the venue sharing
+            # mgmt_ip, they're duplicates from pre-identity renames.
+            absorbed = _absorb_legacy_orphans(db, venue_id, row, existing, job_id)
+            if absorbed:
+                absorbed_ids.update(absorbed)
+                absorbed_count += len(absorbed)
+                db.flush()
         else:
             new_switch = VenueSwitch(
                 venue_id=venue_id,
@@ -206,9 +295,12 @@ def merge_discovered_switches(
             log_created(db, venue_id, "switch", new_switch.id, job_id)
             new_count += 1
 
-    # Mark unseen existing switches offline
+    # Mark unseen existing switches offline (skipping rows already
+    # absorbed into a winner — they no longer exist)
     offline_count = 0
     for row in existing:
+        if row.id in absorbed_ids:
+            continue
         if row.id not in matched_ids and row.online:
             row.online = False
             log_offline(db, venue_id, "switch", row.id, job_id)
@@ -217,7 +309,7 @@ def merge_discovered_switches(
     db.commit()
     logger.info(
         "Switch merge for venue %d: %d discovered, %d existing, %d new, "
-        "%d renamed, %d marked offline",
+        "%d renamed, %d absorbed (legacy), %d marked offline",
         venue_id, len(discovered_switches), len(existing),
-        new_count, rename_count, offline_count,
+        new_count, rename_count, absorbed_count, offline_count,
     )
