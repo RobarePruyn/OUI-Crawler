@@ -5,7 +5,7 @@
 <nav aria-label="breadcrumb">
     <a href="/venues">Venues</a> &rsaquo;
     <a href="/venues/{{ job.venue.id }}">{{ job.venue.name }}</a> &rsaquo;
-    <a href="/jobs/{{ job.id }}">{{ job.job_type | title }}</a> &rsaquo;
+    <a href="/jobs/{{ job.id }}">{{ job.job_type | job_label }}</a> &rsaquo;
     Port Actions
 </nav>
 {% endif %}

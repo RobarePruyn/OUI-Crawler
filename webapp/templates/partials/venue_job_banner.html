@@ -6,7 +6,7 @@
          hx-swap="outerHTML">
     <div style="display:flex;align-items:center;justify-content:space-between;">
         <div>
-            <strong>{{ job.job_type | title }} running</strong>
+            <strong>{{ job.job_type | job_label }} running</strong>
             {% if progress %}
             &mdash; {{ progress.switches_visited }} switches, {{ progress.devices_found }} devices
             {% endif %}
@@ -26,7 +26,7 @@
 <article id="venue-job-done">
     <div style="display:flex;align-items:center;justify-content:space-between;">
         <p style="margin-bottom:0;">
-            {{ job.job_type | title }} completed &mdash;
+            {{ job.job_type | job_label }} completed &mdash;
             {{ job.switches_visited }} switches, {{ job.devices_found }} devices.
         </p>
         <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;">View details</a>
@@ -42,14 +42,14 @@
 {% elif job.status == "failed" %}
 <article>
     <p style="margin-bottom:0;">
-        <mark>{{ job.job_type | title }} failed</mark> &mdash;
+        <mark>{{ job.job_type | job_label }} failed</mark> &mdash;
         {{ job.error_message or "Unknown error" }}
         <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;margin-left:0.5rem;">View details</a>
     </p>
 </article>
 {% elif job.status == "cancelled" %}
 <article>
-    <p style="margin-bottom:0;">{{ job.job_type | title }} cancelled.
+    <p style="margin-bottom:0;">{{ job.job_type | job_label }} cancelled.
         <a href="/jobs/{{ job.id }}" style="font-size:0.85rem;margin-left:0.5rem;">View details</a>
     </p>
 </article>

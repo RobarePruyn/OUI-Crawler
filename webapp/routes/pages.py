@@ -124,10 +124,10 @@ def dashboard(
     return _render(request, "dashboard.html", ctx)
 
 
-# ── Discovery ────────────────────────────────────────────────────────
+# ── Scan ─────────────────────────────────────────────────────────────
 
-@router.get("/discovery", response_class=HTMLResponse)
-def discovery_page(
+@router.get("/scan", response_class=HTMLResponse)
+def scan_page(
     request: Request,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -136,11 +136,15 @@ def discovery_page(
     return _render(request, "discovery.html", {"user": user, "venues": venues})
 
 
-# ── Inventory (redirect to unified discovery page) ──────────────────
+# Legacy redirects — preserve old bookmarks
+@router.get("/discovery")
+def discovery_redirect():
+    return RedirectResponse("/scan", status_code=301)
+
 
 @router.get("/inventory")
 def inventory_redirect():
-    return RedirectResponse("/discovery", status_code=301)
+    return RedirectResponse("/scan", status_code=301)
 
 
 # ── Device Lookup ───────────────────────────────────────────────────

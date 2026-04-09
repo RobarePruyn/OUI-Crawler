@@ -22,7 +22,7 @@
                     {% if user.role == "super_admin" %}
                     <li><a href="/venues" {% if active_page == "venues" %}class="active"{% endif %}>Venues</a></li>
                     {% endif %}
-                    <li><a href="/discovery" {% if active_page == "discovery" %}class="active"{% endif %}>Scan</a></li>
+                    <li><a href="/scan" {% if active_page == "scan" %}class="active"{% endif %}>Scan</a></li>
                     <li><a href="/lookup" {% if active_page == "lookup" %}class="active"{% endif %}>Lookup</a></li>
                     <li><a href="/diff" {% if active_page == "reports" or active_page == "diff" %}class="active"{% endif %}>Reports</a></li>
                 </ul>

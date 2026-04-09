@@ -1,15 +1,15 @@
 {% extends "base.html" %}
-{% block title %}{{ job.job_type | title }} — {{ job.venue.name if job.venue else job.core_ip or job.id[:8] }}{% endblock %}
+{% block title %}{{ job.job_type | job_label }} — {{ job.venue.name if job.venue else job.core_ip or job.id[:8] }}{% endblock %}
 {% block content %}
 {% if job.venue %}
 <nav aria-label="breadcrumb" style="font-size:0.85rem;margin-bottom:0.5rem;">
     <a href="/venues">Venues</a> &rsaquo;
     <a href="/venues/{{ job.venue.id }}">{{ job.venue.name }}</a> &rsaquo;
-    {{ job.job_type | title }}
+    {{ job.job_type | job_label }}
 </nav>
 {% endif %}
 <hgroup>
-    <h1>{{ job.job_type | title }}{% if job.venue %} — {{ job.venue.name }}{% endif %}</h1>
+    <h1>{{ job.job_type | job_label }}{% if job.venue %} — {{ job.venue.name }}{% endif %}</h1>
     <p>{{ job.created_at | localtime }}{% if not job.venue %} &middot; {{ job.core_ip or "" }}{% endif %}</p>
 </hgroup>
 

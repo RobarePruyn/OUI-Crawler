@@ -15,7 +15,7 @@
     <tbody>
         {% for s in schedules %}
         <tr>
-            <td>{{ "Full Scan" if s.job_type == "discovery" else "Inventory" if s.job_type == "inventory" else s.job_type | title }}</td>
+            <td>{{ s.job_type | job_label }}</td>
             <td>{{ s.time_of_day }}</td>
             <td>
                 <form hx-put="/api/venues/{{ venue.id }}/schedules/{{ s.id }}"

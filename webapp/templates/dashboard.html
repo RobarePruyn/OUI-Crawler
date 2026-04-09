@@ -40,7 +40,7 @@
 </div>
 
 <div class="quick-actions">
-    <a href="/discovery"><span class="qa-icon">&#x25B6;</span> Full Scan</a>
+    <a href="/scan"><span class="qa-icon">&#x25B6;</span> Full Scan</a>
     <a href="/venues/{{ venue.id }}/compliance"><span class="qa-icon">&#x2714;</span> Compliance</a>
     <a href="/lookup"><span class="qa-icon">&#x1F50D;</span> Device Lookup</a>
     <a href="/venues/{{ venue.id }}"><span class="qa-icon">&#x2699;</span> Venue Config</a>
@@ -78,7 +78,7 @@
     <tbody>
         {% for job in jobs %}
         <tr>
-            <td>{{ "Full Scan" if job.job_type == "discovery" else "Inventory" if job.job_type == "inventory" else job.job_type | title }}</td>
+            <td>{{ job.job_type | job_label }}</td>
             <td>
                 {% if job.status == "running" %}
                 <span class="badge badge-running">running</span>
