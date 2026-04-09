@@ -108,6 +108,11 @@ class OUIPortMapper:
         # Discovery results
         self.discovered_records: list[DeviceRecord] = []
 
+        # Switch inventory records — populated by both discover() and
+        # discover_switches() so the webapp's switch_merge can match
+        # on hardware identity regardless of which scan path ran.
+        self.switch_inventory_records: list[SwitchRecord] = []
+
         # Track visited switches by BOTH IP and hostname to prevent
         # revisiting the same switch via different VRF sub-interface IPs.
         # Key: switch IP, Value: detected platform string
@@ -506,6 +511,34 @@ class OUIPortMapper:
             f"{indent}[depth={current_depth}] {hostname} "
             f"({switch_ip}) — {platform.platform_name}"
         )
+
+        # --- Collect hardware identity (serial, base MAC, stack members) ---
+        # Best-effort: failures must never abort discovery.
+        hw_identity = {"serial_number": "", "base_mac": "", "stack_member_serials": []}
+        try:
+            hw_identity = platform.get_hardware_identity(connection)
+        except Exception as exc:
+            self.log.debug(
+                f"{indent}  Hardware identity collection failed on "
+                f"{hostname} ({switch_ip}): {exc}"
+            )
+
+        # Record this switch so the webapp's switch_merge can see it.
+        # Uses the same SwitchRecord shape as the inventory path; upstream
+        # fields are left blank since discover() doesn't track them.
+        with self._lock:
+            self.switch_inventory_records.append(SwitchRecord(
+                switch_hostname=hostname,
+                switch_ip=switch_ip,
+                platform=platform.platform_name,
+                discovery_depth=current_depth,
+                upstream_hostname="",
+                upstream_ip="",
+                upstream_interface="",
+                serial_number=hw_identity.get("serial_number", "") or "",
+                base_mac=hw_identity.get("base_mac", "") or "",
+                stack_member_serials=list(hw_identity.get("stack_member_serials") or []),
+            ))
 
         self._emit("switch_start", switch_ip=switch_ip, switch_hostname=hostname)
 
@@ -1141,7 +1174,8 @@ class OUIPortMapper:
                 f"Management subnet filter: {self.mgmt_subnet}"
             )
 
-        self.switch_inventory_records: list[SwitchRecord] = []
+        # Reset for this inventory run (instance may be reused)
+        self.switch_inventory_records = []
 
         self._inventory_switch(
             switch_ip=self.core_ip,
