@@ -35,6 +35,23 @@ async def lifespan(app: FastAPI):
         db.commit()
         print("  Added venue_ports.last_config_error column")
 
+    # Hardware identity columns on venue_switches (rename/merge matching)
+    venue_switch_cols = {c["name"] for c in inspector.get_columns("venue_switches")}
+    if "serial_number" not in venue_switch_cols:
+        db.execute(text("ALTER TABLE venue_switches ADD COLUMN serial_number VARCHAR(64)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_venue_switches_serial_number ON venue_switches(serial_number)"))
+        db.commit()
+        print("  Added venue_switches.serial_number column")
+    if "base_mac" not in venue_switch_cols:
+        db.execute(text("ALTER TABLE venue_switches ADD COLUMN base_mac VARCHAR(17)"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_venue_switches_base_mac ON venue_switches(base_mac)"))
+        db.commit()
+        print("  Added venue_switches.base_mac column")
+    if "stack_member_serials" not in venue_switch_cols:
+        db.execute(text("ALTER TABLE venue_switches ADD COLUMN stack_member_serials TEXT"))
+        db.commit()
+        print("  Added venue_switches.stack_member_serials column")
+
     # Mark any jobs left in running/pending as failed — their threads are gone
     from .db_models import Job
     from datetime import datetime, timezone

@@ -144,6 +144,84 @@ def delete_switch(
     return _render_switches_partial(request, db, venue)
 
 
+@router.post(
+    "/api/venues/{venue_id}/switches/{source_id}/merge-into/{target_id}",
+    response_class=HTMLResponse,
+)
+def merge_switch_into(
+    venue_id: int,
+    source_id: int,
+    target_id: int,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Merge one VenueSwitch into another.
+
+    Re-parents the source switch's ports onto the target, then deletes
+    the source. Used to clean up duplicates created before hardware
+    identity matching landed (e.g. hostname-rename duplicates).
+
+    Port conflicts (same interface on both rows) are resolved by
+    keeping the target's version and dropping the source's — the
+    target is assumed to be the live row going forward. Changelog and
+    action log rows are left in place referring to the source ID for
+    audit history.
+    """
+    if source_id == target_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a switch into itself")
+
+    source = (
+        db.query(VenueSwitch)
+        .filter(VenueSwitch.id == source_id, VenueSwitch.venue_id == venue_id)
+        .first()
+    )
+    target = (
+        db.query(VenueSwitch)
+        .filter(VenueSwitch.id == target_id, VenueSwitch.venue_id == venue_id)
+        .first()
+    )
+    if not source or not target:
+        raise HTTPException(status_code=404, detail="Switch not found")
+
+    # Re-parent ports, dropping any that would violate (switch_id, interface) uniqueness
+    target_interfaces = {
+        p.interface for p in db.query(VenuePort.interface)
+        .filter(VenuePort.switch_id == target_id).all()
+    }
+    dropped = 0
+    moved = 0
+    for port in db.query(VenuePort).filter(VenuePort.switch_id == source_id).all():
+        if port.interface in target_interfaces:
+            db.delete(port)
+            dropped += 1
+        else:
+            port.switch_id = target_id
+            moved += 1
+
+    # Audit trail: record the merge on the target
+    db.add(ChangeLog(
+        venue_id=venue_id,
+        entity_type="switch",
+        entity_id=target_id,
+        change_type="merged",
+        field_name="hostname",
+        old_value=source.hostname,
+        new_value=target.hostname,
+    ))
+
+    db.delete(source)
+    db.commit()
+
+    logger.info(
+        "Merged switch %d (%s) into %d (%s) in venue %d: %d ports moved, %d dropped",
+        source_id, source.hostname, target_id, target.hostname, venue_id, moved, dropped,
+    )
+
+    venue = db.query(Venue).get(venue_id)
+    return _render_switches_partial(request, db, venue)
+
+
 # ── Port Actions ───────────────────────────────────────────────────
 
 class PortActionRequest(BaseModel):

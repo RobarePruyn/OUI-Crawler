@@ -12,6 +12,20 @@ from netmiko.ssh_autodetect import SSHDetect
 from ..models import MacEntry, Neighbor, PortConfig, VlanInfo
 
 
+def _normalize_mac(raw: str) -> str:
+    """Normalize a MAC address to lowercased colon-separated form.
+
+    Accepts Cisco dotted (aabb.ccdd.eeff), dash, colon, or space-separated
+    hex pairs. Returns "" if no 12 hex digits can be extracted.
+    """
+    if not raw:
+        return ""
+    hexchars = re.sub(r'[^0-9a-fA-F]', '', raw)
+    if len(hexchars) != 12:
+        return ""
+    return ":".join(hexchars[i:i + 2] for i in range(0, 12, 2)).lower()
+
+
 # ---------------------------------------------------------------------------
 # Abstract base class
 # ---------------------------------------------------------------------------
@@ -230,6 +244,20 @@ class SwitchPlatform(ABC):
         """Extract the switch hostname from the netmiko prompt."""
         prompt = connection.find_prompt()
         return re.sub(r'[#>]\s*$', '', prompt)
+
+    def get_hardware_identity(self, connection) -> dict:
+        """Collect stable hardware identity from the device.
+
+        Returns a dict with keys:
+          - serial_number: str (chassis serial; for a stack, the active/top)
+          - base_mac: str (lowercased, colon-separated)
+          - stack_member_serials: list[str] (sorted; single-member for
+            non-stacks; multiple for stacks/VSX)
+
+        Subclasses override. Default returns empty values so callers can
+        treat missing identity as "unknown" rather than crashing.
+        """
+        return {"serial_number": "", "base_mac": "", "stack_member_serials": []}
 
 
 # ---------------------------------------------------------------------------

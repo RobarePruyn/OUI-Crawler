@@ -318,6 +318,11 @@ class VenueSwitch(Base):
     upstream_ip = Column(String(64))
     upstream_interface = Column(String(64))
 
+    # Hardware identity (populated from engine, used for rename/merge matching)
+    serial_number = Column(String(64), index=True)
+    base_mac = Column(String(17), index=True)         # lowercased, colon-separated
+    stack_member_serials = Column(Text)                # JSON list[str], sorted
+
     # State
     online = Column(Boolean, nullable=False, default=True)
     source = Column(String(16), nullable=False, default="discovered")  # "manual" / "discovered"

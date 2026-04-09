@@ -309,6 +309,127 @@ def check_venue_compliance(db: Session, venue_id: int) -> list[ComplianceResult]
     return results
 
 
+def check_duplicate_switches(db: Session, venue_id: int) -> list[ComplianceResult]:
+    """Flag VenueSwitch rows that look like duplicates of the same device.
+
+    Signals:
+      1. Two+ switches share the same non-empty base_mac (hardware identity
+         collision — almost certainly the same chassis recorded twice under
+         different hostnames, e.g. pre-rename and post-rename rows).
+      2. Two+ switches have overlapping port MACs beyond a small noise floor
+         (legacy signal for rows predating hardware-identity collection —
+         the same endpoint MACs can't be learned on two different switches
+         simultaneously).
+
+    Emits one warning per duplicate group, keyed to the first switch in
+    the group, with remediation pointing at the manual "Merge into…" UI.
+    """
+    from collections import defaultdict
+
+    VENUE_SENTINEL = f"venue-{venue_id}"
+    db.query(ComplianceResult).filter(
+        ComplianceResult.venue_id == venue_id,
+        ComplianceResult.job_id == VENUE_SENTINEL,
+        ComplianceResult.check_type == "duplicate_switch",
+    ).delete()
+
+    switches = db.query(VenueSwitch).filter(VenueSwitch.venue_id == venue_id).all()
+    if len(switches) < 2:
+        db.commit()
+        return []
+
+    results: list[ComplianceResult] = []
+    flagged_ids: set[int] = set()
+
+    # Signal 1: base_mac collision
+    by_mac: dict[str, list[VenueSwitch]] = defaultdict(list)
+    for sw in switches:
+        mac = (sw.base_mac or "").strip().lower()
+        if mac:
+            by_mac[mac].append(sw)
+    for mac, group in by_mac.items():
+        if len(group) < 2:
+            continue
+        primary = group[0]
+        others = group[1:]
+        for sw in group:
+            flagged_ids.add(sw.id)
+        hostnames = ", ".join(sw.hostname for sw in others)
+        cr = ComplianceResult(
+            job_id=VENUE_SENTINEL,
+            venue_id=venue_id,
+            check_type="duplicate_switch",
+            switch_hostname=primary.hostname,
+            switch_ip=primary.mgmt_ip or "",
+            interface="",
+            mac_address=mac,
+            current_value=f"{len(group)} switches share base MAC {mac}",
+            expected_value="one row per chassis",
+            severity="warning",
+            detail=(
+                f"Switch {primary.hostname} shares hardware identity with: "
+                f"{hostnames}. Use Merge Into on the duplicates to consolidate."
+            ),
+        )
+        db.add(cr)
+        results.append(cr)
+
+    # Signal 2: overlapping port MACs (legacy, skip switches already flagged)
+    legacy_switches = [s for s in switches if s.id not in flagged_ids]
+    if len(legacy_switches) >= 2:
+        port_macs: dict[int, set[str]] = {}
+        for sw in legacy_switches:
+            macs = {
+                (p.mac_address or "").lower()
+                for p in db.query(VenuePort).filter(VenuePort.switch_id == sw.id).all()
+                if p.mac_address
+            }
+            port_macs[sw.id] = macs
+
+        OVERLAP_THRESHOLD = 3  # small noise floor for transient learns
+        sw_by_id = {s.id: s for s in legacy_switches}
+        seen_pairs: set[tuple[int, int]] = set()
+        for sw_a in legacy_switches:
+            for sw_b in legacy_switches:
+                if sw_a.id >= sw_b.id:
+                    continue
+                pair = (sw_a.id, sw_b.id)
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+                overlap = port_macs[sw_a.id] & port_macs[sw_b.id]
+                if len(overlap) >= OVERLAP_THRESHOLD:
+                    flagged_ids.add(sw_a.id)
+                    flagged_ids.add(sw_b.id)
+                    cr = ComplianceResult(
+                        job_id=VENUE_SENTINEL,
+                        venue_id=venue_id,
+                        check_type="duplicate_switch",
+                        switch_hostname=sw_a.hostname,
+                        switch_ip=sw_a.mgmt_ip or "",
+                        interface="",
+                        mac_address="",
+                        current_value=f"{len(overlap)} port MACs overlap with {sw_b.hostname}",
+                        expected_value="one row per chassis",
+                        severity="warning",
+                        detail=(
+                            f"Switches {sw_a.hostname} and {sw_b.hostname} share "
+                            f"{len(overlap)} endpoint MAC(s). Likely a stale row "
+                            f"from a hostname rename predating identity tracking. "
+                            f"Use Merge Into to consolidate."
+                        ),
+                    )
+                    db.add(cr)
+                    results.append(cr)
+
+    db.commit()
+    logger.info(
+        "Duplicate-switch check for venue %d: %d duplicate group(s) flagged",
+        venue_id, len(results),
+    )
+    return results
+
+
 def check_port_config_compliance(db: Session, venue_id: int) -> list[ComplianceResult]:
     """Check persistent VenuePort config state against PortPolicy for their VLAN.
 

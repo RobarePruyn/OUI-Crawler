@@ -64,6 +64,9 @@ class SwitchRecord:
     upstream_hostname: str = ""
     upstream_ip: str = ""
     upstream_interface: str = ""
+    serial_number: str = ""
+    base_mac: str = ""
+    stack_member_serials: list[str] = field(default_factory=list)
 
 
 @dataclass

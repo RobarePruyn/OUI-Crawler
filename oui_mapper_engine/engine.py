@@ -1242,6 +1242,24 @@ class OUIPortMapper:
             f"({switch_ip}) — {platform.platform_name}"
         )
 
+        # --- Collect hardware identity (serial, base MAC, stack members) ---
+        # This is best-effort: failures must never abort discovery, since
+        # the identity is only used downstream for rename/merge matching.
+        hw_identity = {"serial_number": "", "base_mac": "", "stack_member_serials": []}
+        try:
+            hw_identity = platform.get_hardware_identity(connection)
+            if hw_identity.get("serial_number"):
+                self.log.debug(
+                    f"{indent}  Identity: serial={hw_identity['serial_number']} "
+                    f"base_mac={hw_identity.get('base_mac', '')} "
+                    f"members={hw_identity.get('stack_member_serials', [])}"
+                )
+        except Exception as exc:
+            self.log.debug(
+                f"{indent}  Hardware identity collection failed on "
+                f"{hostname} ({switch_ip}): {exc}"
+            )
+
         # --- Record this switch ---
         record = SwitchRecord(
             switch_hostname=hostname,
@@ -1251,6 +1269,9 @@ class OUIPortMapper:
             upstream_hostname=upstream_hostname,
             upstream_ip=upstream_ip,
             upstream_interface=upstream_interface,
+            serial_number=hw_identity.get("serial_number", "") or "",
+            base_mac=hw_identity.get("base_mac", "") or "",
+            stack_member_serials=list(hw_identity.get("stack_member_serials") or []),
         )
         with self._lock:
             self.switch_inventory_records.append(record)

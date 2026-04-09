@@ -2,7 +2,7 @@
 import re
 from ..models import MacEntry, Neighbor, PortConfig, VlanInfo
 from ..mac_utils import normalize_mac_to_cisco
-from . import SwitchPlatform
+from . import SwitchPlatform, _normalize_mac
 
 
 class ArubaAOSCXPlatform(SwitchPlatform):
@@ -502,6 +502,54 @@ class ArubaAOSCXPlatform(SwitchPlatform):
         No abbreviation expansion needed, but we normalize whitespace and case.
         """
         return raw_name.strip()
+
+    def get_hardware_identity(self, connection) -> dict:
+        """Collect chassis serial(s) and base MAC on Aruba AOS-CX.
+
+        Uses `show system` for base MAC and chassis serial on single
+        chassis, and `show vsx status` to detect a VSX pair (two chassis
+        sharing a logical identity).
+        """
+        serials: list[str] = []
+        base_mac = ""
+
+        try:
+            sysout = connection.send_command("show system", read_timeout=20) or ""
+            mac_m = re.search(
+                r'Base MAC Address\s*[:\s]\s*'
+                r'([0-9a-fA-F]{2}(?:[:\.-][0-9a-fA-F]{2}){5})',
+                sysout, re.IGNORECASE,
+            )
+            if mac_m:
+                base_mac = _normalize_mac(mac_m.group(1))
+            sn_m = re.search(r'Serial Number\s*[:\s]\s*(\S+)', sysout, re.IGNORECASE)
+            if sn_m:
+                serials.append(sn_m.group(1).strip())
+        except Exception:
+            pass
+
+        # VSX: the peer chassis has its own serial; collect both so a
+        # rediscovery from either side can re-match on overlap.
+        try:
+            vsx = connection.send_command("show vsx status", read_timeout=15) or ""
+            if re.search(r'(?i)VSX Operational State', vsx):
+                # Best-effort: pull peer serial from 'show vsx status peer'
+                # if the field exists. Not all AOS-CX builds expose it here,
+                # so this is tolerant of missing output.
+                peer_sn = re.search(
+                    r'Peer.*?Serial\s*[:\s]\s*(\S+)', vsx, re.IGNORECASE | re.DOTALL,
+                )
+                if peer_sn and peer_sn.group(1) not in serials:
+                    serials.append(peer_sn.group(1).strip())
+        except Exception:
+            pass
+
+        serials = sorted(set(s for s in serials if s))
+        return {
+            "serial_number": serials[0] if serials else "",
+            "base_mac": base_mac,
+            "stack_member_serials": serials,
+        }
 
     def get_port_channel_command(self) -> str:
         return "show lag"

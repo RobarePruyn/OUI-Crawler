@@ -2,7 +2,7 @@
 import ipaddress
 import re
 from ..models import MacEntry, Neighbor, PortConfig, VlanInfo
-from . import SwitchPlatform
+from . import SwitchPlatform, _normalize_mac
 
 
 class CiscoIOSPlatform(SwitchPlatform):
@@ -520,6 +520,67 @@ class CiscoIOSPlatform(SwitchPlatform):
             if expanded != raw_name:
                 return expanded
         return raw_name
+
+    def get_hardware_identity(self, connection) -> dict:
+        """Collect chassis serial(s) and base MAC on Cisco IOS / IOS-XE.
+
+        Stack-aware: uses `show inventory` to enumerate all chassis
+        serial numbers (one per stack member). Base MAC comes from
+        `show version`.
+        """
+        serials: list[str] = []
+        base_mac = ""
+        primary_serial = ""
+
+        try:
+            inv = connection.send_command("show inventory", read_timeout=20) or ""
+            # Each stack member appears as a NAME/DESCR block followed by
+            # PID/VID/SN. We want serials of chassis entries (NAME contains
+            # "Chassis" or "Switch N").
+            blocks = re.split(r'\n(?=NAME:)', inv)
+            for block in blocks:
+                name_m = re.search(r'NAME:\s*"([^"]*)"', block)
+                if not name_m:
+                    continue
+                name = name_m.group(1)
+                if not re.search(r'(?i)\bchassis\b|\bswitch\s*\d+\b|\bstack\b', name):
+                    continue
+                sn_m = re.search(r'SN:\s*(\S+)', block)
+                if sn_m:
+                    serial = sn_m.group(1).strip()
+                    if serial and serial not in serials:
+                        serials.append(serial)
+        except Exception:
+            pass
+
+        try:
+            ver = connection.send_command("show version", read_timeout=20) or ""
+            # Fallback serial from show version if inventory yielded nothing
+            if not serials:
+                m = re.search(
+                    r'(?:Processor board ID|System serial number)\s*[:\s]\s*(\S+)',
+                    ver, re.IGNORECASE,
+                )
+                if m:
+                    serials.append(m.group(1).strip())
+            # Base MAC — IOS-XE: "Base Ethernet MAC Address       : AA:BB:CC:DD:EE:FF"
+            mac_m = re.search(
+                r'Base (?:ethernet )?MAC Address\s*[:\s]\s*'
+                r'([0-9a-fA-F]{2}(?:[:\.-][0-9a-fA-F]{2}){5})',
+                ver, re.IGNORECASE,
+            )
+            if mac_m:
+                base_mac = _normalize_mac(mac_m.group(1))
+        except Exception:
+            pass
+
+        serials = sorted(set(s for s in serials if s))
+        primary_serial = serials[0] if serials else ""
+        return {
+            "serial_number": primary_serial,
+            "base_mac": base_mac,
+            "stack_member_serials": serials,
+        }
 
     def get_port_channel_command(self) -> str:
         return "show etherchannel summary"

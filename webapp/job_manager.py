@@ -136,6 +136,11 @@ class JobManager:
                     check_venue_compliance(db, job.venue_id)
                 except Exception:
                     logger.exception("Auto venue compliance check failed for job %s", job_id)
+                try:
+                    from .compliance import check_duplicate_switches
+                    check_duplicate_switches(db, job.venue_id)
+                except Exception:
+                    logger.exception("Auto duplicate-switch check failed for job %s", job_id)
 
         except Exception as exc:
             logger.exception("Discovery job %s failed", job_id)

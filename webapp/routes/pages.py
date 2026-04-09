@@ -783,10 +783,15 @@ def run_venue_compliance(
     venue = db.query(Venue).get(venue_id)
     if not venue:
         raise HTTPException(status_code=404)
-    from ..compliance import check_venue_compliance, check_port_config_compliance
+    from ..compliance import (
+        check_venue_compliance,
+        check_port_config_compliance,
+        check_duplicate_switches,
+    )
     vlan_results = check_venue_compliance(db, venue_id)
     config_results = check_port_config_compliance(db, venue_id)
-    return {"ok": True, "count": len(vlan_results) + len(config_results)}
+    dup_results = check_duplicate_switches(db, venue_id)
+    return {"ok": True, "count": len(vlan_results) + len(config_results) + len(dup_results)}
 
 
 # ── Settings ─────────────────────────────────────────────────────────
