@@ -8,14 +8,12 @@
     <label class="scan-mode">
         <input type="radio" name="scan_mode" value="full" checked>
         <span>Full Scan</span>
-    </label>
-    <label class="scan-mode">
-        <input type="radio" name="scan_mode" value="discovery">
-        <span>Discovery Only</span>
+        <small>Topology walk + device discovery</small>
     </label>
     <label class="scan-mode">
         <input type="radio" name="scan_mode" value="inventory">
         <span>Inventory Only</span>
+        <small>Topology walk, no device hunt</small>
     </label>
 </div>
 
@@ -157,7 +155,7 @@ function updateModeUI() {
     trackVlansField.style.display = isInventory ? 'none' : '';
 
     // Update button label
-    const labels = { full: 'Start Full Scan', discovery: 'Start Discovery', inventory: 'Start Inventory' };
+    const labels = { full: 'Start Full Scan', inventory: 'Start Inventory' };
     btn.textContent = labels[mode];
 
     // Toggle OUI required attribute

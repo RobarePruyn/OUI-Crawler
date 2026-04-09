@@ -274,11 +274,15 @@ def venue_scan(
     db: Session = Depends(get_db),
     mode: str = "full",
 ):
-    """Unified scan endpoint. mode: full (discovery+inventory), discovery, inventory."""
+    """Unified scan endpoint.
+
+    mode=full       → inventory phase (LLDP walk) + discovery phase
+                      (OUI device hunt) in one job. Default.
+    mode=inventory  → inventory only (topology + VLANs, no device hunt).
+    """
     if mode == "inventory":
         return venue_inventory(venue_id, user, db)
-    else:
-        return venue_discover(venue_id, user, db)
+    return venue_discover(venue_id, user, db)
 
 
 @router.post("/{venue_id}/inventory")

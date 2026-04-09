@@ -77,6 +77,14 @@ class JobManager:
             platform = params.get("platform", "auto")
             forced_platform = None if platform == "auto" else platform
 
+            # Full Scan = inventory phase (LLDP walk) + discovery phase
+            # (OUI device hunt) against a single mapper instance so state
+            # is shared. Venue-linked jobs run both; standalone (manual
+            # core_ip) jobs skip inventory since there's nowhere to
+            # persist the switch/VLAN data.
+            job = db.query(Job).get(job_id)
+            venue_id = job.venue_id if job else None
+
             mapper = OUIPortMapper(
                 core_ip=params["core_ip"],
                 username=params["username"],
@@ -90,12 +98,29 @@ class JobManager:
                 mgmt_subnet=params.get("mgmt_subnet") or "",
                 track_vlans=params.get("track_vlans"),
                 vlan_subnets=params.get("vlan_subnets"),
+                discover_vlans=bool(venue_id),
                 progress_callback=on_progress,
             )
 
             with self._lock:
                 self._mappers[job_id] = mapper
 
+            # Phase 1: inventory (LLDP topology walk). Populates
+            # switch_inventory_records and discovered_vlans so the
+            # subsequent device discovery runs against a fully-known
+            # venue. Best-effort: failure here logs and proceeds.
+            if venue_id:
+                try:
+                    progress.message = "Inventory phase: walking topology..."
+                    mapper.discover_switches()
+                except Exception:
+                    logger.exception(
+                        "Inventory phase failed for job %s; "
+                        "continuing with device discovery", job_id,
+                    )
+
+            # Phase 2: device discovery (MAC/OUI hunt).
+            progress.message = "Discovery phase: hunting devices..."
             devices = mapper.discover()
 
             # Store results
@@ -118,39 +143,48 @@ class JobManager:
             # Merge discovered switches into venue state (must run BEFORE
             # port merge, since port merge needs the VenueSwitch rows to
             # exist and to have absorbed any legacy duplicates)
-            job = db.query(Job).get(job_id)
-            if job and job.venue_id and mapper.switch_inventory_records:
+            if venue_id and mapper.switch_inventory_records:
                 try:
                     from .switch_merge import merge_discovered_switches
                     merge_discovered_switches(
-                        db, job.venue_id, job_id, mapper.switch_inventory_records,
+                        db, venue_id, job_id, mapper.switch_inventory_records,
                     )
                 except Exception:
                     logger.exception("Switch merge failed for job %s", job_id)
 
+            # Merge discovered VLANs (populated by the inventory phase)
+            if venue_id and mapper.discovered_vlans:
+                try:
+                    from .vlan_merge import merge_discovered_vlans
+                    merge_discovered_vlans(
+                        db, venue_id, params["core_ip"], mapper.discovered_vlans,
+                    )
+                except Exception:
+                    logger.exception("VLAN merge failed for job %s", job_id)
+
             # Merge discovered devices into venue port state
-            if job and job.venue_id:
+            if venue_id:
                 try:
                     from .port_merge import merge_discovered_ports
-                    merge_discovered_ports(db, job.venue_id, job_id, devices)
+                    merge_discovered_ports(db, venue_id, job_id, devices)
                 except Exception:
                     logger.exception("Port merge failed for job %s", job_id)
 
             # Auto-run compliance if linked to a venue
-            if job and job.venue_id:
+            if venue_id:
                 try:
                     from .compliance import check_vlan_compliance
-                    check_vlan_compliance(db, job_id, job.venue_id)
+                    check_vlan_compliance(db, job_id, venue_id)
                 except Exception:
                     logger.exception("Auto job compliance check failed for job %s", job_id)
                 try:
                     from .compliance import check_venue_compliance
-                    check_venue_compliance(db, job.venue_id)
+                    check_venue_compliance(db, venue_id)
                 except Exception:
                     logger.exception("Auto venue compliance check failed for job %s", job_id)
                 try:
                     from .compliance import check_duplicate_switches
-                    check_duplicate_switches(db, job.venue_id)
+                    check_duplicate_switches(db, venue_id)
                 except Exception:
                     logger.exception("Auto duplicate-switch check failed for job %s", job_id)
 
