@@ -115,8 +115,20 @@ class JobManager:
 
             self._mark_completed(db, job_id, progress.switches_visited, progress.devices_found)
 
-            # Merge discovered devices into venue port state
+            # Merge discovered switches into venue state (must run BEFORE
+            # port merge, since port merge needs the VenueSwitch rows to
+            # exist and to have absorbed any legacy duplicates)
             job = db.query(Job).get(job_id)
+            if job and job.venue_id and mapper.switch_inventory_records:
+                try:
+                    from .switch_merge import merge_discovered_switches
+                    merge_discovered_switches(
+                        db, job.venue_id, job_id, mapper.switch_inventory_records,
+                    )
+                except Exception:
+                    logger.exception("Switch merge failed for job %s", job_id)
+
+            # Merge discovered devices into venue port state
             if job and job.venue_id:
                 try:
                     from .port_merge import merge_discovered_ports
