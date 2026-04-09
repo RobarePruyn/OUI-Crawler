@@ -39,6 +39,12 @@ def _is_mac(term: str) -> bool:
     return len(cleaned) == 12
 
 
+def _is_partial_mac(term: str) -> bool:
+    """Accept a partial MAC fragment (4-11 hex chars, ignoring separators)."""
+    cleaned = re.sub(r'[^0-9a-fA-F]', '', term)
+    return 4 <= len(cleaned) < 12
+
+
 def _connect(host, username, password, enable_secret, device_type, log):
     """Open a netmiko connection with standard timeouts."""
     conn = ConnectHandler(
@@ -77,14 +83,27 @@ def lookup_device(
     # Determine search type
     searching_by_ip = _is_ip(search_term)
     searching_by_mac = _is_mac(search_term)
+    searching_by_partial_mac = (
+        not searching_by_ip
+        and not searching_by_mac
+        and _is_partial_mac(search_term)
+    )
 
-    if not searching_by_ip and not searching_by_mac:
-        result.warnings.append(f"'{search_term}' does not look like a MAC or IP address")
+    if not (searching_by_ip or searching_by_mac or searching_by_partial_mac):
+        result.warnings.append(
+            f"'{search_term}' does not look like a MAC, partial MAC "
+            f"(4+ hex chars), or IP address"
+        )
         return result
 
     if searching_by_mac:
         result.mac_address = normalize_mac_to_cisco(search_term)
         log.info(f"Lookup by MAC: {result.mac_address}")
+    elif searching_by_partial_mac:
+        # We don't know the full MAC yet — resolve it against the core
+        # switch's MAC table once we're connected.
+        partial_hex = re.sub(r'[^0-9a-fA-F]', '', search_term).lower()
+        log.info(f"Lookup by partial MAC: {partial_hex}")
     else:
         result.ip_address = search_term
         log.info(f"Lookup by IP: {result.ip_address}")
@@ -111,6 +130,39 @@ def lookup_device(
     try:
         hostname = platform.get_hostname(conn)
         result.platform = device_type
+
+        # --- If searching by partial MAC, resolve it against the core's
+        # MAC table first. Ambiguous matches return a warning listing
+        # candidates so the user can disambiguate. ---
+        if searching_by_partial_mac:
+            log.info("Resolving partial MAC against core MAC table...")
+            mac_output_early = conn.send_command(platform.get_mac_table_command())
+            mac_table_early = platform.parse_mac_table(mac_output_early)
+            matches = []
+            for entry in mac_table_early:
+                clean = re.sub(r'[^0-9a-fA-F]', '', entry.mac_address).lower()
+                if partial_hex in clean:
+                    matches.append(entry.mac_address)
+            # Unique MACs only — same MAC can appear on many interfaces
+            unique = list(dict.fromkeys(matches))
+            if not unique:
+                result.warnings.append(
+                    f"Partial MAC '{partial_hex}' not found in MAC table "
+                    f"on {hostname} ({core_ip})"
+                )
+                return result
+            if len(unique) > 1:
+                preview = ", ".join(unique[:10])
+                more = f" (+{len(unique) - 10} more)" if len(unique) > 10 else ""
+                result.warnings.append(
+                    f"Partial MAC '{partial_hex}' matched {len(unique)} "
+                    f"MACs: {preview}{more}. Please refine your search."
+                )
+                return result
+            result.mac_address = unique[0]
+            log.info(f"Resolved partial '{partial_hex}' → {result.mac_address}")
+            # Promote to full-MAC search path from here on
+            searching_by_mac = True
 
         # --- If searching by IP, ping first to populate ARP, then resolve MAC ---
         if searching_by_ip:
