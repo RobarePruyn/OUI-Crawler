@@ -78,18 +78,62 @@
             .then(r => r.json())
             .then(data => {
                 if (data.ok) {
-                    alert('Update queued. NetCaster will restart shortly.\n\nThis page will reload automatically when the service is back.');
-                    setTimeout(pollForRestart, 20000);
+                    showUpdateOverlay();
+                    setTimeout(pollForRestart, 5000);
                 } else {
                     alert('Could not queue update: ' + (data.detail || data.reason || 'unknown error'));
                 }
             })
             .catch(err => alert('Update request failed: ' + err));
     }
+
+    const _updateStart = {t: 0, phase: 'queued'};
+    function showUpdateOverlay() {
+        _updateStart.t = Date.now();
+        const overlay = document.createElement('div');
+        overlay.id = 'update-overlay';
+        overlay.innerHTML = '' +
+            '<div class="update-overlay-inner">' +
+            '  <div class="update-spinner"></div>' +
+            '  <h2>Updating NetCaster</h2>' +
+            '  <p id="update-phase">Queued — waiting for the update watcher to pick up the flag…</p>' +
+            '  <p class="update-elapsed"><span id="update-elapsed">0</span>s elapsed</p>' +
+            '  <p class="update-hint">This usually takes 30–60 seconds. The page will reload automatically.</p>' +
+            '</div>';
+        document.body.appendChild(overlay);
+        setInterval(() => {
+            const el = document.getElementById('update-elapsed');
+            if (el) el.textContent = Math.floor((Date.now() - _updateStart.t) / 1000);
+        }, 1000);
+    }
+    function setUpdatePhase(msg) {
+        const el = document.getElementById('update-phase');
+        if (el) el.textContent = msg;
+    }
     function pollForRestart() {
-        fetch('/api/system/update/status')
-            .then(r => { if (r.ok) window.location.reload(); else throw new Error(); })
-            .catch(() => setTimeout(pollForRestart, 5000));
+        fetch('/api/system/update/status', {cache: 'no-store'})
+            .then(r => {
+                if (!r.ok) throw new Error('down');
+                return r.json();
+            })
+            .then(data => {
+                // Service is back. Is it on a new SHA?
+                if (data.current_sha && data.current_sha !== '{{ update_state.current_sha[:7] if update_state is defined else "" }}') {
+                    setUpdatePhase('Update complete. Reloading…');
+                    setTimeout(() => window.location.reload(), 800);
+                } else if (data.last_update_status && data.last_update_status.indexOf('FAILED') === 0) {
+                    setUpdatePhase('Update failed: ' + data.last_update_status);
+                    const hint = document.querySelector('.update-hint');
+                    if (hint) hint.innerHTML = '<a href="#" onclick="window.location.reload()">Reload page</a>';
+                } else {
+                    setUpdatePhase('Service is back — verifying version…');
+                    setTimeout(pollForRestart, 2000);
+                }
+            })
+            .catch(() => {
+                setUpdatePhase('Service restarting — waiting for it to come back…');
+                setTimeout(pollForRestart, 2000);
+            });
     }
     </script>
 </body>
