@@ -6,7 +6,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from oui_mapper_engine import DeviceRecord, OUIPortMapper
+from netcaster_engine import DeviceRecord, NetCasterEngine
 
 from ..auth import User, get_current_user
 from ..database import get_db
@@ -45,7 +45,7 @@ def preview_action(
     """Compute the safety-filtered action plan without executing."""
     devices = _load_devices(db, req.job_id)
 
-    mapper = OUIPortMapper(
+    mapper = NetCasterEngine(
         core_ip="0.0.0.0",
         username=req.username,
         password=req.password,

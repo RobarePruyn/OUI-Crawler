@@ -201,7 +201,7 @@ def port_action(
     if platform == "auto":
         platform = "cisco_ios"
 
-    from oui_mapper_engine.platforms import get_platform, PLATFORM_MAP
+    from netcaster_engine.platforms import get_platform, PLATFORM_MAP
     if platform not in PLATFORM_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown platform: {platform}")
 
@@ -435,7 +435,7 @@ def batch_port_action(
     venue_vlans = db.query(VenueVlan).filter(VenueVlan.venue_id == venue_id).all()
     vlan_name_map = {str(v.vlan_id): v.name or "" for v in venue_vlans}
 
-    from oui_mapper_engine.platforms import get_platform, PLATFORM_MAP
+    from netcaster_engine.platforms import get_platform, PLATFORM_MAP
     from ..compliance import _render_description
 
     results_lock = threading.Lock()

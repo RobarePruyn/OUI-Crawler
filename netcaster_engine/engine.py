@@ -29,7 +29,7 @@ from .platforms import (
 )
 
 
-class OUIPortMapper:
+class NetCasterEngine:
     """
     Main discovery engine. Recursively traverses a switching fabric
     to locate devices by OUI prefix.
@@ -2329,4 +2329,4 @@ class OUIPortMapper:
 
         old_records = load_csv_rows(old_file)
         new_records = load_csv_rows(new_file)
-        return OUIPortMapper.diff_records(old_records, new_records)
+        return NetCasterEngine.diff_records(old_records, new_records)

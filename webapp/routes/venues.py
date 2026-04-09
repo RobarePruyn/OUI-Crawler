@@ -179,7 +179,7 @@ def test_venue_connection(
     if not venue:
         raise HTTPException(status_code=404, detail="Venue not found")
 
-    from oui_mapper_engine.platforms import detect_platform
+    from netcaster_engine.platforms import detect_platform
     password = decrypt_credential(venue.ssh_password_enc)
     enable = decrypt_credential(venue.enable_secret_enc) if venue.enable_secret_enc else password
 

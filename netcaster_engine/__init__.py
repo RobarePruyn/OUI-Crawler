@@ -26,5 +26,5 @@ from .platforms import (
     detect_platform,
     get_platform,
 )
-from .engine import OUIPortMapper
+from .engine import NetCasterEngine
 from .lookup import LookupResult, lookup_device

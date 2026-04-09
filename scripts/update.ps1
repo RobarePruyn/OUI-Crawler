@@ -17,7 +17,17 @@ $LogDir     = Join-Path $InstallDir "logs"
 $UpdateLog  = Join-Path $LogDir "update.log"
 $StatusFile = Join-Path $LogDir "last-update-status.txt"
 $NssmExe    = Join-Path $InstallDir "tools\nssm.exe"
-$ServiceName = "OUIPortMapper"
+
+# Service name transition: installs prior to the rebrand used
+# "OUIPortMapper". Prefer the new "NetCaster" name, fall back to the
+# legacy name if that's what's actually registered with NSSM.
+$ServiceName = "NetCaster"
+$LegacyServiceName = "OUIPortMapper"
+$svcCheck = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+if (-not $svcCheck) {
+    $legacyCheck = Get-Service -Name $LegacyServiceName -ErrorAction SilentlyContinue
+    if ($legacyCheck) { $ServiceName = $LegacyServiceName }
+}
 $VenvPython = Join-Path $InstallDir ".venv\Scripts\python.exe"
 
 function Write-Log($msg) {

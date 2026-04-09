@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from oui_mapper_engine.mac_utils import (
+from netcaster_engine.mac_utils import (
     mac_matches_oui,
     normalize_mac_to_cisco,
     normalize_oui_prefix,

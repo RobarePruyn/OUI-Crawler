@@ -72,7 +72,7 @@ def device_lookup(
     password = decrypt_credential(venue.ssh_password_enc)
     enable = decrypt_credential(venue.enable_secret_enc) if venue.enable_secret_enc else password
 
-    from oui_mapper_engine.lookup import lookup_device
+    from netcaster_engine.lookup import lookup_device
 
     result = lookup_device(
         search_term=req.search_term,
@@ -207,7 +207,7 @@ def vlan_push(
     password = decrypt_credential(venue.ssh_password_enc)
     enable = decrypt_credential(venue.enable_secret_enc) if venue.enable_secret_enc else password
 
-    from oui_mapper_engine.platforms import get_platform, PLATFORM_MAP
+    from netcaster_engine.platforms import get_platform, PLATFORM_MAP
 
     if req.platform not in PLATFORM_MAP:
         raise HTTPException(status_code=400, detail=f"Unknown platform: {req.platform}")
@@ -378,7 +378,7 @@ def lookup_port_action(
         )
         conn.enable()
 
-        from oui_mapper_engine.platforms import get_platform
+        from netcaster_engine.platforms import get_platform
         plat = get_platform(req.platform)
 
         if req.action == "shutdown":
@@ -455,7 +455,7 @@ def bulk_port_action(
             )
             conn.enable()
 
-            from oui_mapper_engine.platforms import get_platform
+            from netcaster_engine.platforms import get_platform
             plat = get_platform(platform)
 
             for intf in interfaces:

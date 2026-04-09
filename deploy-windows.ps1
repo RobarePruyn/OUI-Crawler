@@ -200,9 +200,9 @@ Write-Step "Configuring environment"
 if (-not (Test-Path $EnvFile)) {
     $pyExe = Join-Path $VenvDir "Scripts\python.exe"
     $secret = & $pyExe -c "import secrets; print(secrets.token_urlsafe(32))"
-    $dbPath = Join-Path $ProjectDir "oui_mapper.db"
+    $dbPath = Join-Path $ProjectDir "netcaster.db"
 
-    $envContent = "OUI_MAPPER_SECRET_KEY=$secret`nOUI_MAPPER_DB_PATH=$dbPath"
+    $envContent = "NETCASTER_SECRET_KEY=$secret`nNETCASTER_DB_PATH=$dbPath"
     $envContent | Set-Content -Path $EnvFile -Encoding UTF8
 
     Write-Ok "Created $EnvFile with generated secret key"

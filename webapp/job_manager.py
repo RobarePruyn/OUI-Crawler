@@ -12,9 +12,9 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from oui_mapper_engine import (
+from netcaster_engine import (
     DeviceRecord,
-    OUIPortMapper,
+    NetCasterEngine,
     ProgressEvent,
     SwitchRecord,
 )
@@ -40,7 +40,7 @@ class JobManager:
     def __init__(self):
         self._pool = ThreadPoolExecutor(max_workers=settings.max_concurrent_jobs)
         self._progress: dict[str, ProgressState] = {}
-        self._mappers: dict[str, OUIPortMapper] = {}
+        self._mappers: dict[str, NetCasterEngine] = {}
         self._lock = threading.Lock()
 
     def get_progress(self, job_id: str) -> Optional[ProgressState]:
@@ -85,7 +85,7 @@ class JobManager:
             job = db.query(Job).get(job_id)
             venue_id = job.venue_id if job else None
 
-            mapper = OUIPortMapper(
+            mapper = NetCasterEngine(
                 core_ip=params["core_ip"],
                 username=params["username"],
                 password=params["password"],
@@ -223,7 +223,7 @@ class JobManager:
             job = db.query(Job).get(job_id)
             venue_id = job.venue_id if job else None
 
-            mapper = OUIPortMapper(
+            mapper = NetCasterEngine(
                 core_ip=params["core_ip"],
                 username=params["username"],
                 password=params["password"],
@@ -315,7 +315,7 @@ class JobManager:
 
             save_config = params.get("save_config", False)
 
-            mapper = OUIPortMapper(
+            mapper = NetCasterEngine(
                 core_ip="0.0.0.0",  # not used for CSV-based actions
                 username=params["username"],
                 password=params["password"],

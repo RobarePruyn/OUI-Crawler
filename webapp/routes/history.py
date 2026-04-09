@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from dataclasses import asdict
 
-from oui_mapper_engine import DeviceRecord, OUIPortMapper
+from netcaster_engine import DeviceRecord, NetCasterEngine
 
 from ..auth import User, get_current_user
 from ..database import get_db
@@ -207,7 +207,7 @@ def diff_jobs(
     old_records = _load_as_dicts(req.old_job_id)
     new_records = _load_as_dicts(req.new_job_id)
 
-    result = OUIPortMapper.diff_records(old_records, new_records)
+    result = NetCasterEngine.diff_records(old_records, new_records)
 
     def _dict_to_out(d: dict) -> DeviceResultOut:
         return DeviceResultOut(
