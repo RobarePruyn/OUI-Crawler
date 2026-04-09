@@ -18,7 +18,7 @@ from netmiko.exceptions import (
 )
 
 from .models import (
-    DeviceRecord, SwitchRecord, Neighbor, MacEntry,
+    DeviceRecord, SwitchRecord, Neighbor, MacEntry, PortObservation,
     ProgressEvent, ActionPlan, ActionResult, DiffResult,
     VlanInfo,
 )
@@ -112,6 +112,13 @@ class OUIPortMapper:
         # discover_switches() so the webapp's switch_merge can match
         # on hardware identity regardless of which scan path ran.
         self.switch_inventory_records: list[SwitchRecord] = []
+
+        # Port census: for each successfully-visited switch (keyed by
+        # lowercased hostname), the list of access-port observations we
+        # made — including MACs that aren't in the OUI watchlist. Used
+        # by port_merge to refresh stale VenuePort entries when devices
+        # are swapped for non-tracked OUIs.
+        self.port_census: dict[str, list[PortObservation]] = {}
 
         # Track visited switches by BOTH IP and hostname to prevent
         # revisiting the same switch via different VRF sub-interface IPs.
@@ -722,6 +729,50 @@ class OUIPortMapper:
                 )
                 mac_count_by_port[entry.interface] = (
                     mac_count_by_port.get(entry.interface, 0) + 1
+                )
+
+            # --- Build port census ---
+            # Record every access-looking port's current MAC so
+            # port_merge can refresh stale entries — even for MACs
+            # that aren't in the OUI watchlist. A port counts as
+            # access-looking if it has <= mac_threshold MACs AND no
+            # Switch/Router neighbor advertising CDP/LLDP.
+            entries_by_intf: dict[str, MacEntry] = {}
+            for entry in all_mac_entries:
+                norm = platform.normalize_interface(entry.interface)
+                # First seen wins when a port appears multiple times
+                if norm not in entries_by_intf:
+                    entries_by_intf[norm] = entry
+
+            census: list[PortObservation] = []
+            for norm_intf, entry in entries_by_intf.items():
+                port_mac_count = max(
+                    mac_count_by_port.get(norm_intf, 0),
+                    mac_count_by_port.get(entry.interface, 0),
+                )
+                if port_mac_count > self.mac_threshold:
+                    continue  # trunk / multi-device port
+                nbr = (
+                    neighbor_by_intf.get(norm_intf)
+                    or neighbor_by_intf.get(entry.interface)
+                )
+                if nbr and nbr.capabilities:
+                    caps_upper = nbr.capabilities.upper()
+                    if "SWITCH" in caps_upper or "ROUTER" in caps_upper:
+                        continue  # uplink to another switch
+                # LLDP without capabilities or endpoint-capability
+                # (Host, Phone, etc.) → still access port
+                census.append(PortObservation(
+                    interface=entry.interface,
+                    mac_address=entry.mac_address,
+                    vlan=entry.vlan,
+                ))
+            if census:
+                with self._lock:
+                    self.port_census[hostname_key] = census
+                self.log.info(
+                    f"{indent}  Port census: {len(census)} access-port "
+                    f"observations recorded"
                 )
 
             # --- Classify each matching MAC ---

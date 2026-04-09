@@ -166,7 +166,10 @@ class JobManager:
             if venue_id:
                 try:
                     from .port_merge import merge_discovered_ports
-                    merge_discovered_ports(db, venue_id, job_id, devices)
+                    merge_discovered_ports(
+                        db, venue_id, job_id, devices,
+                        port_census=getattr(mapper, "port_census", None),
+                    )
                 except Exception:
                     logger.exception("Port merge failed for job %s", job_id)
 

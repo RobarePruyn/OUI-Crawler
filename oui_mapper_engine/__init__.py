@@ -9,6 +9,7 @@ from .models import (
     SwitchRecord,
     Neighbor,
     MacEntry,
+    PortObservation,
     ProgressEvent,
     ActionPlan,
     ActionResult,

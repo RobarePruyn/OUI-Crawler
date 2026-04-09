@@ -5,8 +5,14 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from oui_mapper_engine.mac_utils import (
+    mac_matches_oui,
+    normalize_mac_to_cisco,
+    normalize_oui_prefix,
+)
+
 from .changelog import log_changes, log_created
-from .db_models import VenuePort, VenueSwitch
+from .db_models import OUIEntry, VenuePort, VenueSwitch
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +24,7 @@ def merge_discovered_ports(
     venue_id: int,
     job_id: str,
     discovered_devices: list,
+    port_census: dict | None = None,
 ) -> None:
     """
     Merge discovered devices into persistent VenuePort records.
@@ -32,7 +39,7 @@ def merge_discovered_ports(
     """
     now = datetime.now(timezone.utc)
 
-    if not discovered_devices:
+    if not discovered_devices and not port_census:
         return
 
     # --- Step 1: Ensure switches exist ---
@@ -43,12 +50,17 @@ def merge_discovered_ports(
         s.hostname.lower(): s for s in existing_switches
     }
 
-    # Collect unique switches from discovered devices
+    # Collect unique switches from discovered devices (and census)
     device_switches: dict[str, str] = {}  # hostname_lower → switch_ip
     for dev in discovered_devices:
         key = dev.switch_hostname.strip().lower()
         if key and key not in device_switches:
             device_switches[key] = dev.switch_ip
+    if port_census:
+        for hostname_key in port_census.keys():
+            k = hostname_key.strip().lower()
+            if k and k not in device_switches:
+                device_switches[k] = ""
 
     # Build a reverse lookup for original-case hostnames
     hostname_original: dict[str, str] = {}
@@ -56,6 +68,11 @@ def merge_discovered_ports(
         k = dev.switch_hostname.strip().lower()
         if k and k not in hostname_original:
             hostname_original[k] = dev.switch_hostname.strip()
+    if port_census:
+        for hostname_key in port_census.keys():
+            k = hostname_key.strip().lower()
+            if k and k not in hostname_original:
+                hostname_original[k] = hostname_key.strip()
 
     # Create stubs for missing switches
     for key, switch_ip in device_switches.items():
@@ -204,6 +221,120 @@ def merge_discovered_ports(
                 ip_propagated += 1
         if ip_propagated:
             logger.info("Propagated IP updates to %d duplicate-MAC ports", ip_propagated)
+
+    # --- Step 5: Port census reconciliation ---
+    # For each switch we actually visited, the engine emits a PortObservation
+    # for every access port (single MAC, no switch/router neighbor). Use that
+    # to refresh rows whose MAC changed to a non-tracked OUI, and to clear
+    # rows on visited switches whose port is now empty. Compliance ignores
+    # ports with empty matched_oui, so non-tracked devices are discovered
+    # but not surfaced as suggestions.
+    if port_census:
+        # Load venue OUI list once for reverse lookup
+        oui_entries = db.query(OUIEntry).filter(OUIEntry.venue_id == venue_id).all()
+        normalized_oui_list = [
+            normalize_oui_prefix(e.oui_prefix) for e in oui_entries if e.oui_prefix
+        ]
+
+        census_updated = 0
+        census_cleared = 0
+        census_new = 0
+
+        for hostname_key_raw, observations in port_census.items():
+            hostname_key = hostname_key_raw.strip().lower()
+            switch = switch_map.get(hostname_key)
+            if not switch:
+                continue
+
+            existing_ports = db.query(VenuePort).filter(
+                VenuePort.switch_id == switch.id,
+            ).all()
+            port_map = {p.interface: p for p in existing_ports}
+
+            observed_by_intf: dict[str, object] = {}
+            for obs in observations:
+                observed_by_intf[obs.interface] = obs
+
+            # Update / create from observations
+            for interface, obs in observed_by_intf.items():
+                mac_cisco = normalize_mac_to_cisco(obs.mac_address) if obs.mac_address else ""
+                matched = mac_matches_oui(mac_cisco, normalized_oui_list) if mac_cisco else None
+                if interface in port_map:
+                    row = port_map[interface]
+                    # Skip if a device record already updated this row this run
+                    # with a matched OUI — that path has richer data (IP, config).
+                    if row.last_crawl_job_id == job_id and row.matched_oui:
+                        continue
+                    old_vals = {f: getattr(row, f) for f in _TRACKED_FIELDS}
+                    vlan_changed = obs.vlan and row.vlan and obs.vlan != row.vlan
+                    mac_changed = mac_cisco and row.mac_address and mac_cisco != row.mac_address
+                    new_ip = row.ip_address
+                    if vlan_changed or mac_changed:
+                        new_ip = None  # stale
+                    new_vals = {
+                        "mac_address": mac_cisco or None,
+                        "ip_address": new_ip,
+                        "vlan": obs.vlan or None,
+                        "matched_oui": matched or None,
+                        "notes": row.notes,
+                    }
+                    log_changes(db, venue_id, "port", row.id, old_vals, new_vals, job_id)
+                    row.mac_address = new_vals["mac_address"]
+                    row.ip_address = new_vals["ip_address"]
+                    row.vlan = new_vals["vlan"]
+                    row.matched_oui = new_vals["matched_oui"]
+                    row.last_seen_at = now
+                    row.last_crawl_job_id = job_id
+                    census_updated += 1
+                else:
+                    new_port = VenuePort(
+                        switch_id=switch.id,
+                        interface=interface,
+                        mac_address=mac_cisco or None,
+                        ip_address=None,
+                        vlan=obs.vlan or None,
+                        matched_oui=matched or None,
+                        source="discovered",
+                        first_seen_at=now,
+                        last_seen_at=now,
+                        last_crawl_job_id=job_id,
+                    )
+                    db.add(new_port)
+                    db.flush()
+                    log_created(db, venue_id, "port", new_port.id, job_id)
+                    census_new += 1
+
+            # Clear rows on visited switches whose interface is no longer
+            # in the census (port empty now, or converted to trunk/uplink).
+            # Only clear ports that weren't touched this run.
+            for interface, row in port_map.items():
+                if interface in observed_by_intf:
+                    continue
+                if row.last_crawl_job_id == job_id:
+                    continue
+                if not (row.mac_address or row.ip_address or row.matched_oui):
+                    continue
+                old_vals = {f: getattr(row, f) for f in _TRACKED_FIELDS}
+                new_vals = {
+                    "mac_address": None,
+                    "ip_address": None,
+                    "vlan": None,
+                    "matched_oui": None,
+                    "notes": row.notes,
+                }
+                log_changes(db, venue_id, "port", row.id, old_vals, new_vals, job_id)
+                row.mac_address = None
+                row.ip_address = None
+                row.vlan = None
+                row.matched_oui = None
+                row.last_seen_at = now
+                row.last_crawl_job_id = job_id
+                census_cleared += 1
+
+        logger.info(
+            "Port census for venue %d: %d updated, %d new, %d cleared",
+            venue_id, census_updated, census_new, census_cleared,
+        )
 
     db.commit()
     logger.info(

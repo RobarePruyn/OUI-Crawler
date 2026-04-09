@@ -55,6 +55,21 @@ class MacEntry:
 
 
 @dataclass
+class PortObservation:
+    """What the engine actually saw on one access port at scan time.
+
+    Emitted for every access-looking port on a successfully-visited
+    switch (single MAC, no switch/router neighbor). Used by port_merge
+    to refresh VenuePort rows even for MACs that aren't in the venue's
+    OUI watchlist — so swapping a device is reflected in the DB
+    regardless of whether the new OUI is tracked.
+    """
+    interface: str
+    mac_address: str
+    vlan: str
+
+
+@dataclass
 class SwitchRecord:
     """A switch discovered via CDP/LLDP neighbor crawl."""
     switch_hostname: str
