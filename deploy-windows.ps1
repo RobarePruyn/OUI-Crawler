@@ -218,21 +218,23 @@ $proc = Start-Process -FilePath $uvicorn -ArgumentList "run:app --host 127.0.0.1
 
 Start-Sleep -Seconds 5
 
+# Any HTTP response (even 401/404/500) means the server is up. We only
+# want to warn when we can't reach it at all (connection refused, timeout).
+# PS 5.1 doesn't know HttpResponseException, so we inspect the exception
+# by type name string rather than a typed catch.
 try {
-    $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port" -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
+    $response = Invoke-WebRequest -Uri "http://127.0.0.1:$Port" -UseBasicParsing -TimeoutSec 5
     Write-Ok "App responded (HTTP $($response.StatusCode))"
-} catch [System.Management.Automation.ParameterBindingException] {
-    # -SkipHttpErrorCheck not available on older PS; fall back
-    try {
-        $null = Invoke-WebRequest -Uri "http://127.0.0.1:$Port" -UseBasicParsing -TimeoutSec 5
-        Write-Ok "App responded"
-    } catch [Microsoft.PowerShell.Commands.HttpResponseException] {
-        Write-Ok "App responded (HTTP error, but server is up)"
-    } catch {
+} catch {
+    # If the exception carries a Response object, the server did reply —
+    # it was just a non-2xx status (e.g. 401 Unauthorized on the login
+    # redirect), which still proves the app is alive.
+    if ($_.Exception.Response) {
+        $code = [int]$_.Exception.Response.StatusCode
+        Write-Ok "App responded (HTTP $code)"
+    } else {
         Write-Warn "Could not reach app during smoke test - check $LogDir\smoke-test.log"
     }
-} catch {
-    Write-Warn "Could not reach app during smoke test - check $LogDir\smoke-test.log"
 }
 
 if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
