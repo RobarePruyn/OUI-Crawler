@@ -262,34 +262,46 @@ def lookup_device(
                 if downstream_nbr:
                     break
 
-        # --- Follow downstream neighbor if found ---
-        if downstream_nbr:
+        # --- Follow downstream neighbors iteratively until we reach
+        #     a true access port (no further CDP/LLDP neighbor) or lose
+        #     the MAC trail. Safety cap at 10 hops. ---
+        MAX_HOPS = 10
+        cur_hostname = hostname
+        cur_ip = core_ip
+        cur_platform = platform
+        cur_device_type = device_type
+
+        for _hop in range(MAX_HOPS):
+            if not downstream_nbr:
+                break  # access port — done chasing
+
             result.hops.append({
-                "switch_hostname": hostname,
-                "switch_ip": core_ip,
+                "switch_hostname": cur_hostname,
+                "switch_ip": cur_ip,
                 "port": port,
                 "reason": f"MAC learned on trunk to {downstream_nbr.neighbor_hostname}",
             })
 
             log.info(
-                f"Following neighbor hop: {hostname}:{port} → "
+                f"Following neighbor hop: {cur_hostname}:{port} → "
                 f"{downstream_nbr.neighbor_hostname} ({downstream_nbr.neighbor_ip})"
             )
 
-            # Disconnect from core
+            # Disconnect current switch
             conn.disconnect()
             conn = None
 
-            # Connect to downstream switch
             downstream_ip = downstream_nbr.neighbor_ip
+
             try:
                 ds_type, ds_conn = detect_platform(
-                    downstream_ip, username, password, enable_secret or password, log, hint=device_type
+                    downstream_ip, username, password, enable_secret or password,
+                    log, hint=cur_device_type,
                 )
                 if not ds_type:
                     result.warnings.append(f"Could not detect platform on {downstream_ip}")
-                    result.switch_hostname = hostname
-                    result.switch_ip = core_ip
+                    result.switch_hostname = cur_hostname
+                    result.switch_ip = cur_ip
                     result.interface = port
                     result.vlan = vlan
                     return result
@@ -305,39 +317,79 @@ def lookup_device(
                 ds_mac_table = ds_platform.parse_mac_table(ds_mac_output)
                 ds_matches = [e for e in ds_mac_table if e.mac_address == target_mac]
 
-                if ds_matches:
-                    mac_entry = ds_matches[0]
-                    port = mac_entry.interface
-                    vlan = mac_entry.vlan
-                    log.info(f"MAC found on downstream {ds_hostname} port {port} VLAN {vlan}")
-
-                    # Gather interface details from downstream
-                    _gather_interface_details(result, ds_conn, ds_platform, ds_hostname, downstream_ip, port, vlan, log)
-                    ds_conn.disconnect()
-                    return result
-                else:
+                if not ds_matches:
                     result.warnings.append(
                         f"MAC {target_mac} not found in MAC table on downstream switch "
                         f"{ds_hostname} ({downstream_ip}) — recording last known location"
                     )
                     ds_conn.disconnect()
-                    # Fall through to record the core switch location
-                    result.switch_hostname = hostname
-                    result.switch_ip = core_ip
+                    result.switch_hostname = cur_hostname
+                    result.switch_ip = cur_ip
                     result.interface = port
                     result.vlan = vlan
                     return result
 
+                # MAC found — update tracking vars for the next iteration
+                mac_entry = ds_matches[0]
+                port = mac_entry.interface
+                vlan = mac_entry.vlan
+                log.info(f"MAC found on downstream {ds_hostname} port {port} VLAN {vlan}")
+
+                # Promote downstream switch to "current"
+                conn = ds_conn
+                cur_hostname = ds_hostname
+                cur_ip = downstream_ip
+                cur_platform = ds_platform
+                cur_device_type = ds_type
+
+                # Check if this new port also has a downstream neighbor
+                norm_port = cur_platform.normalize_interface(port)
+
+                # Port-channel members
+                po_cmd = cur_platform.get_port_channel_command()
+                port_channel_members = {}
+                if po_cmd:
+                    po_output = conn.send_command(po_cmd)
+                    port_channel_members = cur_platform.parse_port_channel_members(po_output)
+
+                # Neighbors
+                nbr_output = conn.send_command(cur_platform.get_neighbor_command())
+                neighbors = cur_platform.parse_neighbors(nbr_output)
+
+                lldp_cmd = getattr(cur_platform, 'get_lldp_command', None)
+                if lldp_cmd and callable(lldp_cmd):
+                    lldp_output = conn.send_command(lldp_cmd())
+                    lldp_parser = getattr(cur_platform, 'parse_lldp_neighbors', None)
+                    if lldp_parser:
+                        neighbors.extend(lldp_parser(lldp_output))
+
+                neighbor_by_intf = {}
+                for nbr in neighbors:
+                    norm_local = cur_platform.normalize_interface(nbr.local_interface)
+                    neighbor_by_intf[norm_local] = nbr
+                    neighbor_by_intf[nbr.local_interface] = nbr
+
+                downstream_nbr = neighbor_by_intf.get(norm_port) or neighbor_by_intf.get(port)
+
+                if not downstream_nbr and norm_port in port_channel_members:
+                    for member in port_channel_members[norm_port]:
+                        norm_member = cur_platform.normalize_interface(member)
+                        downstream_nbr = neighbor_by_intf.get(norm_member) or neighbor_by_intf.get(member)
+                        if downstream_nbr:
+                            break
+
+                # Loop continues if downstream_nbr is set
+
             except Exception as exc:
                 result.warnings.append(f"Failed to connect to downstream {downstream_ip}: {exc}")
-                result.switch_hostname = hostname
-                result.switch_ip = core_ip
+                result.switch_hostname = cur_hostname
+                result.switch_ip = cur_ip
                 result.interface = port
                 result.vlan = vlan
                 return result
 
-        # --- No downstream neighbor — this is the access port ---
-        _gather_interface_details(result, conn, platform, hostname, core_ip, port, vlan, log)
+        # --- Reached an access port (no further downstream neighbor) ---
+        _gather_interface_details(result, conn, cur_platform, cur_hostname, cur_ip, port, vlan, log)
 
     finally:
         if conn:

@@ -229,6 +229,10 @@ def merge_discovered_ports(
     # rows on visited switches whose port is now empty. Compliance ignores
     # ports with empty matched_oui, so non-tracked devices are discovered
     # but not surfaced as suggestions.
+    logger.info(
+        "Port census received: %s",
+        {k: len(v) for k, v in port_census.items()} if port_census else "None",
+    )
     if port_census:
         # Load venue OUI list once for reverse lookup
         oui_entries = db.query(OUIEntry).filter(OUIEntry.venue_id == venue_id).all()
@@ -244,6 +248,10 @@ def merge_discovered_ports(
             hostname_key = hostname_key_raw.strip().lower()
             switch = switch_map.get(hostname_key)
             if not switch:
+                logger.warning(
+                    "Census: switch '%s' not found in switch_map (keys: %s)",
+                    hostname_key, list(switch_map.keys())[:5],
+                )
                 continue
 
             existing_ports = db.query(VenuePort).filter(
@@ -264,7 +272,21 @@ def merge_discovered_ports(
                     # Skip if a device record already updated this row this run
                     # with a matched OUI — that path has richer data (IP, config).
                     if row.last_crawl_job_id == job_id and row.matched_oui:
+                        logger.debug(
+                            "Census skip %s %s: already updated by device record "
+                            "(job=%s, oui=%s)",
+                            hostname_key, interface, job_id, row.matched_oui,
+                        )
                         continue
+                    if row.mac_address != mac_cisco or row.vlan != (obs.vlan or None):
+                        logger.info(
+                            "Census update %s %s: DB mac=%s vlan=%s → "
+                            "live mac=%s vlan=%s (oui %s→%s)",
+                            hostname_key, interface,
+                            row.mac_address, row.vlan,
+                            mac_cisco, obs.vlan,
+                            row.matched_oui, matched,
+                        )
                     old_vals = {f: getattr(row, f) for f in _TRACKED_FIELDS}
                     vlan_changed = obs.vlan and row.vlan and obs.vlan != row.vlan
                     mac_changed = mac_cisco and row.mac_address and mac_cisco != row.mac_address

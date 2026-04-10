@@ -748,9 +748,13 @@ class NetCasterEngine:
                 mac_count_by_port[norm_port] = (
                     mac_count_by_port.get(norm_port, 0) + 1
                 )
-                mac_count_by_port[entry.interface] = (
-                    mac_count_by_port.get(entry.interface, 0) + 1
-                )
+                # Also index by raw name — but only if it differs from
+                # the normalized form to avoid double-counting (Aruba
+                # AOS-CX normalize_interface is a no-op, so norm == raw).
+                if entry.interface != norm_port:
+                    mac_count_by_port[entry.interface] = (
+                        mac_count_by_port.get(entry.interface, 0) + 1
+                    )
 
             # --- Build port census ---
             # Record every access-looking port's current MAC so
@@ -766,12 +770,21 @@ class NetCasterEngine:
                     entries_by_intf[norm] = entry
 
             census: list[PortObservation] = []
+            skipped_multi = 0
+            skipped_uplink = 0
             for norm_intf, entry in entries_by_intf.items():
                 port_mac_count = max(
                     mac_count_by_port.get(norm_intf, 0),
                     mac_count_by_port.get(entry.interface, 0),
                 )
                 if port_mac_count > self.mac_threshold:
+                    skipped_multi += 1
+                    if self.log.isEnabledFor(logging.DEBUG):
+                        self.log.debug(
+                            f"{indent}    Census skip {entry.interface}: "
+                            f"{port_mac_count} MACs > threshold "
+                            f"{self.mac_threshold}"
+                        )
                     continue  # trunk / multi-device port
                 nbr = (
                     neighbor_by_intf.get(norm_intf)
@@ -780,6 +793,7 @@ class NetCasterEngine:
                 if nbr and nbr.capabilities:
                     caps_upper = nbr.capabilities.upper()
                     if "SWITCH" in caps_upper or "ROUTER" in caps_upper:
+                        skipped_uplink += 1
                         continue  # uplink to another switch
                 # LLDP without capabilities or endpoint-capability
                 # (Host, Phone, etc.) → still access port
@@ -794,6 +808,15 @@ class NetCasterEngine:
                 self.log.info(
                     f"{indent}  Port census: {len(census)} access-port "
                     f"observations recorded"
+                    f" (skipped {skipped_multi} multi-MAC, "
+                    f"{skipped_uplink} uplink)"
+                )
+            else:
+                self.log.info(
+                    f"{indent}  Port census: 0 observations "
+                    f"(skipped {skipped_multi} multi-MAC, "
+                    f"{skipped_uplink} uplink, "
+                    f"{len(entries_by_intf)} total ports)"
                 )
 
             # --- Classify each matching MAC ---
