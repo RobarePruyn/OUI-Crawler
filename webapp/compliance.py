@@ -90,6 +90,29 @@ def _match_oui(mac: str, oui_map: dict[str, list[VlanSubnetPair]]) -> Optional[l
     return None
 
 
+def _pick_suggested_vlan(
+    pairs: list[VlanSubnetPair],
+    switch_vlans: set[str],
+) -> tuple[VlanSubnetPair, bool]:
+    """Choose the best VLAN to suggest for a wrong-VLAN violation.
+
+    Prefer candidate VLANs that already exist on the switch (avoids
+    suggesting a VLAN the switch doesn't carry). When multiple candidates
+    exist on the switch, pick the highest VLAN number (most specific /
+    newest pool wins). When no candidates exist, pick the lowest VLAN
+    number (simplest new VLAN to create).
+
+    Returns (pair, vlan_exists_on_switch).
+    """
+    present = [p for p in pairs if p.vlan in switch_vlans]
+    if present:
+        # Highest existing VLAN wins ties
+        return max(present, key=lambda p: int(p.vlan) if p.vlan.isdigit() else 0), True
+    # No candidate VLAN on switch — suggest lowest (new VLAN to create)
+    lowest = min(pairs, key=lambda p: int(p.vlan) if p.vlan.isdigit() else 0)
+    return lowest, False
+
+
 def check_vlan_compliance(db: Session, job_id: str, venue_id: int) -> list[ComplianceResult]:
     """Compare discovered device VLANs and IPs against venue OUI registry expectations.
 
@@ -105,6 +128,15 @@ def check_vlan_compliance(db: Session, job_id: str, venue_id: int) -> list[Compl
     oui_map = _build_oui_map(oui_entries)
     if not oui_map:
         return []
+
+    # Build per-switch VLAN sets from discovered devices so suggestions
+    # prefer VLANs already present on each switch.
+    vlans_by_switch: dict[str, set[str]] = {}
+    for dev in devices:
+        v = (dev.vlan or "").strip()
+        host = (dev.switch_hostname or "").strip().lower()
+        if v and host:
+            vlans_by_switch.setdefault(host, set()).add(v)
 
     # Clear existing results
     db.query(ComplianceResult).filter(
@@ -142,12 +174,15 @@ def check_vlan_compliance(db: Session, job_id: str, venue_id: int) -> list[Compl
                     detail += f", IP {device_ip} in {pair.subnet}"
                 expected = device_vlan
         else:
-            # Wrong VLAN — suggest the first candidate
-            suggested = pairs[0]
+            host_key = (dev.switch_hostname or "").strip().lower()
+            switch_vlans = vlans_by_switch.get(host_key, set())
+            suggested, vlan_exists = _pick_suggested_vlan(pairs, switch_vlans)
             severity = "warning"
             detail = f"Device on VLAN {device_vlan} but expected one of: {', '.join(valid_vlans)}. Suggest VLAN {suggested.vlan}"
             if suggested.subnet:
                 detail += f" ({suggested.subnet})"
+            if not vlan_exists:
+                detail += " [VLAN not on switch — needs creation]"
             expected = suggested.vlan
 
         cr = ComplianceResult(
@@ -242,6 +277,14 @@ def check_venue_compliance(db: Session, venue_id: int) -> list[ComplianceResult]
     if not ports:
         return []
 
+    # Build per-switch VLAN sets so suggestions prefer VLANs already
+    # trunked to each switch (highest matching VLAN wins ties).
+    vlans_by_switch: dict[int, set[str]] = {}
+    for port in ports:
+        v = (port.vlan or "").strip()
+        if v:
+            vlans_by_switch.setdefault(port.switch_id, set()).add(v)
+
     # Clear existing venue-level compliance (sentinel job_id)
     VENUE_SENTINEL = f"venue-{venue_id}"
     db.query(ComplianceResult).filter(
@@ -280,11 +323,14 @@ def check_venue_compliance(db: Session, venue_id: int) -> list[ComplianceResult]
                     detail += f", IP {device_ip} in {pair.subnet}"
                 expected = device_vlan
         else:
-            suggested = pairs[0]
+            switch_vlans = vlans_by_switch.get(port.switch_id, set())
+            suggested, vlan_exists = _pick_suggested_vlan(pairs, switch_vlans)
             severity = "warning"
             detail = f"Device on VLAN {device_vlan} but expected one of: {', '.join(valid_vlans)}. Suggest VLAN {suggested.vlan}"
             if suggested.subnet:
                 detail += f" ({suggested.subnet})"
+            if not vlan_exists:
+                detail += " [VLAN not on switch — needs creation]"
             expected = suggested.vlan
 
         cr = ComplianceResult(
